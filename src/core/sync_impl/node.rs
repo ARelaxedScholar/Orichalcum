@@ -1,6 +1,6 @@
-use crate::core::Executable;
 use crate::core::sync_impl::AsAny;
 use crate::core::sync_impl::NodeValue;
+use crate::core::Executable;
 use std::collections::HashMap;
 
 /// ------ Base Node Logic -------------------------------------------------------
@@ -22,9 +22,9 @@ impl Node {
         self.data.params = params;
     }
     pub fn next(self, node: Executable) -> Self {
-        self.next_on(node, "default")
+        self.next_on("default", node)
     }
-    pub fn next_on(mut self, node: Executable, action: &str) -> Self {
+    pub fn next_on(mut self, action: &str, node: Executable) -> Self {
         if self.data.successors.contains_key(action) {
             log::warn!(
                 "Warning: Action {} was found in successors, Overwriting key {}.",

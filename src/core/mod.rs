@@ -1,5 +1,5 @@
-mod async_impl;
-mod sync_impl;
+pub mod async_impl;
+pub mod sync_impl;
 
 use async_impl::async_node::AsyncNode;
 use std::collections::HashMap;
