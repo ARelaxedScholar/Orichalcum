@@ -1,6 +1,6 @@
-use crate::core::Executable;
-use crate::core::sync_impl::NodeValue;
 use crate::core::sync_impl::node::{Node, NodeLogic};
+use crate::core::sync_impl::NodeValue;
+use crate::core::Executable;
 use std::collections::HashMap;
 
 /// The logic that is specif
@@ -172,7 +172,7 @@ mod tests {
             // Store the node ID in shared state
             let id = prep_res.as_str().unwrap_or("unknown");
             shared.insert(format!("visited_{}", id), json!(true));
-            
+
             // Return the next action or None to terminate
             self.next_action.clone()
         }
@@ -189,7 +189,7 @@ mod tests {
             next_action: None,
         });
         let flow = Flow::new(node);
-        
+
         // Flow should deref to Node
         assert!(flow.data.params.is_empty());
     }
@@ -202,9 +202,9 @@ mod tests {
         });
         let flow = Flow::new(node);
         let mut shared = HashMap::new();
-        
+
         let action = flow.run(&mut shared);
-        
+
         // Flow should have visited the single node
         assert_eq!(shared.get("visited_single"), Some(&json!(true)));
         // Flow's action should be from the node (None -> "default"? Actually flow returns Some("default")?)
@@ -220,22 +220,24 @@ mod tests {
             id: "node3".to_string(),
             next_action: None,
         });
-        
+
         let node2 = Node::new(SimpleLogic {
             id: "node2".to_string(),
             next_action: Some("default".to_string()),
-        }).next(Executable::Sync(node3));
-        
+        })
+        .next(Executable::Sync(node3));
+
         let node1 = Node::new(SimpleLogic {
             id: "node1".to_string(),
             next_action: Some("default".to_string()),
-        }).next(Executable::Sync(node2));
-        
+        })
+        .next(Executable::Sync(node2));
+
         let flow = Flow::new(node1);
         let mut shared = HashMap::new();
-        
+
         let action = flow.run(&mut shared);
-        
+
         // All nodes should have been visited
         assert_eq!(shared.get("visited_node1"), Some(&json!(true)));
         assert_eq!(shared.get("visited_node2"), Some(&json!(true)));
@@ -250,17 +252,17 @@ mod tests {
             id: "node2b".to_string(),
             next_action: None,
         });
-        
+
         let node2a = Node::new(SimpleLogic {
             id: "node2a".to_string(),
             next_action: None,
         });
-        
+
         #[derive(Clone)]
         struct BranchingLogic {
             branch_to: String,
         }
-        
+
         impl NodeLogic for BranchingLogic {
             fn prep(
                 &self,
@@ -269,11 +271,11 @@ mod tests {
             ) -> NodeValue {
                 json!(self.branch_to.clone())
             }
-            
+
             fn exec(&self, input: NodeValue) -> NodeValue {
                 input
             }
-            
+
             fn post(
                 &self,
                 shared: &mut HashMap<String, NodeValue>,
@@ -284,23 +286,23 @@ mod tests {
                 shared.insert("branch_taken".to_string(), json!(branch));
                 Some(branch.to_string())
             }
-            
+
             fn clone_box(&self) -> Box<dyn NodeLogic> {
                 Box::new(self.clone())
             }
         }
-        
+
         let node1 = Node::new(BranchingLogic {
             branch_to: "branch_a".to_string(),
         })
         .next_on("branch_a", Executable::Sync(node2a))
         .next_on("branch_b", Executable::Sync(node2b));
-        
+
         let flow = Flow::new(node1);
         let mut shared = HashMap::new();
-        
+
         let action = flow.run(&mut shared);
-        
+
         // Should have taken branch_a
         assert_eq!(shared.get("branch_taken"), Some(&json!("branch_a")));
         assert_eq!(shared.get("visited_node2a"), Some(&json!(true)));
@@ -312,7 +314,7 @@ mod tests {
     fn test_flow_with_params() {
         #[derive(Clone)]
         struct ParamLogic;
-        
+
         impl NodeLogic for ParamLogic {
             fn prep(
                 &self,
@@ -321,12 +323,12 @@ mod tests {
             ) -> NodeValue {
                 params.get("test_param").cloned().unwrap_or(NodeValue::Null)
             }
-            
+
             fn exec(&self, input: NodeValue) -> NodeValue {
                 // Return the input value
                 input
             }
-            
+
             fn post(
                 &self,
                 shared: &mut HashMap<String, NodeValue>,
@@ -336,24 +338,24 @@ mod tests {
                 shared.insert("received_param".to_string(), prep_res);
                 None
             }
-            
+
             fn clone_box(&self) -> Box<dyn NodeLogic> {
                 Box::new(self.clone())
             }
         }
-        
+
         let node = Node::new(ParamLogic);
         let flow = Flow::new(node);
         let mut shared = HashMap::new();
         let mut params = HashMap::new();
         params.insert("test_param".to_string(), json!("test_value"));
-        
+
         // Set params on the flow's internal node
         let mut flow_clone = flow.clone();
         flow_clone.set_params(params);
-        
+
         let action = flow_clone.run(&mut shared);
-        
+
         // Should have received the parameter
         assert_eq!(shared.get("received_param"), Some(&json!("test_value")));
         assert_eq!(action, Some("default".to_string()));
@@ -363,16 +365,16 @@ mod tests {
     #[should_panic(expected = "Flow cannot handle AsyncNode")]
     fn test_flow_panics_on_async_node() {
         use crate::core::async_impl::async_node::AsyncNode;
-        
+
         #[derive(Clone)]
         struct AsyncTestLogic;
-        
+
         #[async_trait]
         impl crate::core::async_impl::async_node::AsyncNodeLogic for AsyncTestLogic {
             fn clone_box(&self) -> Box<dyn crate::core::async_impl::async_node::AsyncNodeLogic> {
                 Box::new(self.clone())
             }
-            
+
             async fn prep(
                 &self,
                 _params: &HashMap<String, NodeValue>,
@@ -380,11 +382,11 @@ mod tests {
             ) -> NodeValue {
                 NodeValue::Null
             }
-            
+
             async fn exec(&self, _input: NodeValue) -> NodeValue {
                 NodeValue::Null
             }
-            
+
             async fn post(
                 &self,
                 _shared: &mut HashMap<String, NodeValue>,
@@ -394,16 +396,17 @@ mod tests {
                 Some("default".to_string())
             }
         }
-        
+
         let async_node = AsyncNode::new(AsyncTestLogic);
         let node = Node::new(SimpleLogic {
             id: "test".to_string(),
             next_action: Some("default".to_string()),
-        }).next(Executable::Async(async_node));
-        
+        })
+        .next(Executable::Async(async_node));
+
         let flow = Flow::new(node);
         let mut shared = HashMap::new();
-        
+
         // This should panic when it encounters the async node
         flow.run(&mut shared);
     }

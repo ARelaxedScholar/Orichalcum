@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
-use crate::llm::{Client, HasProvider, error::LLMError};
+use crate::llm::{error::LLMError, Client, HasProvider};
 
 pub struct Ollama;
 

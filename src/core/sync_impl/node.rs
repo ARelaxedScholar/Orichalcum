@@ -44,7 +44,7 @@ use std::collections::HashMap;
 /// let node = Node::new(GreetLogic);
 /// let mut shared = HashMap::new();
 /// shared.insert("name".to_string(), "Orichalcum".into());
-/// 
+///
 /// node.run(&mut shared);
 /// assert_eq!(shared.get("greeting").unwrap().as_str().unwrap(), "Hello, Orichalcum!");
 /// ```
@@ -67,7 +67,7 @@ impl Node {
             behaviour: Box::new(behaviour),
         }
     }
-    
+
     /// Sets the node's parameters.
     ///
     /// Parameters are node-specific configuration that can be accessed
@@ -75,14 +75,14 @@ impl Node {
     pub fn set_params(&mut self, params: HashMap<String, NodeValue>) {
         self.data.params = params;
     }
-    
+
     /// Chains another node to execute after this node via the "default" action.
     ///
     /// Equivalent to `self.next_on("default", node)`.
     pub fn next(self, node: Executable) -> Self {
         self.next_on("default", node)
     }
-    
+
     /// Chains another node to execute after this node when the specified action is returned.
     ///
     /// If the node already has a successor for the given action, it will be overwritten
@@ -172,7 +172,7 @@ pub trait NodeLogic: AsAny + Send + Sync + 'static {
     ) -> NodeValue {
         NodeValue::default()
     }
-    
+
     /// Execute the core logic of the node.
     ///
     /// This phase performs the main computation or operation using the
@@ -186,7 +186,7 @@ pub trait NodeLogic: AsAny + Send + Sync + 'static {
     fn exec(&self, _input: NodeValue) -> NodeValue {
         NodeValue::default()
     }
-    
+
     /// Post-process results and update shared state.
     ///
     /// This final phase can store results in the shared state and
@@ -287,7 +287,7 @@ mod tests {
         let node1 = Node::new(TestLogic);
         let node2 = Node::new(TestLogic);
         let node1_with_next = node1.next(Executable::Sync(node2));
-        
+
         assert_eq!(node1_with_next.data.successors.len(), 1);
         assert!(node1_with_next.data.successors.contains_key("default"));
     }
@@ -297,7 +297,7 @@ mod tests {
         let node1 = Node::new(TestLogic);
         let node2 = Node::new(TestLogic);
         let node1_with_next = node1.next_on("custom", Executable::Sync(node2));
-        
+
         assert_eq!(node1_with_next.data.successors.len(), 1);
         assert!(node1_with_next.data.successors.contains_key("custom"));
     }
@@ -307,7 +307,7 @@ mod tests {
         let node = Node::new(TestLogic);
         let mut shared = HashMap::new();
         shared.insert("test".to_string(), json!(42));
-        
+
         let action = node.run(&mut shared);
         assert_eq!(action, Some("default".to_string()));
         assert_eq!(shared.get("prep"), Some(&json!(42)));
@@ -320,7 +320,7 @@ mod tests {
         let mut shared = HashMap::new();
         let mut params = HashMap::new();
         params.insert("param".to_string(), json!("value"));
-        
+
         let action = node.run_with_params(&mut shared, &params);
         assert_eq!(action, Some("default".to_string()));
         // prep should be null since "test" key doesn't exist in shared
@@ -332,24 +332,24 @@ mod tests {
     fn test_node_logic_default_implementations() {
         #[derive(Clone)]
         struct DefaultLogic;
-        
+
         impl NodeLogic for DefaultLogic {
             fn clone_box(&self) -> Box<dyn NodeLogic> {
                 Box::new(self.clone())
             }
         }
-        
+
         let logic = DefaultLogic;
         let params = HashMap::new();
         let shared = HashMap::new();
         let mut shared_mut = HashMap::new();
-        
+
         let prep = logic.prep(&params, &shared);
         assert_eq!(prep, NodeValue::default());
-        
+
         let exec = logic.exec(NodeValue::Null);
         assert_eq!(exec, NodeValue::default());
-        
+
         let post = logic.post(&mut shared_mut, NodeValue::Null, NodeValue::Null);
         assert_eq!(post, None);
     }

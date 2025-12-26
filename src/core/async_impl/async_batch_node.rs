@@ -3,6 +3,7 @@ use crate::core::sync_impl::NodeValue;
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AsyncBatchLogic<L: AsyncNodeLogic> {
@@ -28,8 +29,13 @@ impl<L: AsyncNodeLogic + Clone> AsyncNodeLogic for AsyncBatchLogic<L> {
     async fn exec(&self, items: NodeValue) -> NodeValue {
         // Check that input is indeed an array
         if let Some(arr) = items.as_array() {
-            let results: Vec<NodeValue> = stream::iter(arr)
-                .then(|item| self.logic.exec(item.clone()))
+            let owned_items: Vec<NodeValue> = arr.iter().cloned().collect();
+            let logic = Arc::new(self.logic.clone());
+            let results: Vec<NodeValue> = stream::iter(owned_items)
+                .then(move |item| {
+                    let l = Arc::clone(&logic);
+                    async move { l.exec(item).await }
+                })
                 .collect()
                 .await;
 
@@ -105,10 +111,10 @@ mod tests {
     async fn test_async_batch_logic_creation() {
         let logic = AsyncMultiplyLogic;
         let batch_logic = AsyncBatchLogic::new(logic);
-        
+
         let items = json!([1, 2, 3]);
         let result = batch_logic.exec(items).await;
-        
+
         assert!(result.is_array());
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 3);
@@ -121,7 +127,7 @@ mod tests {
     async fn test_async_batch_logic_with_non_array_input() {
         let logic = AsyncMultiplyLogic;
         let batch_logic = AsyncBatchLogic::new(logic);
-        
+
         let result = batch_logic.exec(json!("not an array")).await;
         assert!(result.is_null());
     }
@@ -132,7 +138,7 @@ mod tests {
         struct TrackingAsyncLogic {
             marker: String,
         }
-        
+
         #[async_trait]
         impl AsyncNodeLogic for TrackingAsyncLogic {
             async fn prep(
@@ -142,11 +148,11 @@ mod tests {
             ) -> NodeValue {
                 json!(self.marker.clone())
             }
-            
+
             async fn exec(&self, input: NodeValue) -> NodeValue {
                 input
             }
-            
+
             async fn post(
                 &self,
                 shared: &mut HashMap<String, NodeValue>,
@@ -158,28 +164,30 @@ mod tests {
                 shared.insert("post_called".to_string(), json!(true));
                 Some("default".to_string())
             }
-            
+
             fn clone_box(&self) -> Box<dyn AsyncNodeLogic> {
                 Box::new(self.clone())
             }
         }
-        
+
         let inner_logic = TrackingAsyncLogic {
             marker: "test_marker".to_string(),
         };
-        
+
         let batch_logic = AsyncBatchLogic::new(inner_logic.clone());
         let params = HashMap::new();
         let shared = HashMap::new();
         let mut shared_mut = HashMap::new();
-        
+
         let prep_result = batch_logic.prep(&params, &shared).await;
         assert_eq!(prep_result, json!("test_marker"));
-        
+
         let exec_result = batch_logic.exec(json!([1, 2, 3])).await;
         assert!(exec_result.is_array());
-        
-        let post_result = batch_logic.post(&mut shared_mut, prep_result, exec_result).await;
+
+        let post_result = batch_logic
+            .post(&mut shared_mut, prep_result, exec_result)
+            .await;
         assert_eq!(post_result, Some("default".to_string()));
         assert_eq!(shared_mut.get("post_called"), Some(&json!(true)));
         assert!(shared_mut.get("prep_res").is_some());
@@ -190,7 +198,7 @@ mod tests {
     async fn test_new_async_batch_node() {
         let logic = AsyncMultiplyLogic;
         let batch_node = new_async_batch_node(logic);
-        
+
         let mut shared = HashMap::new();
         let action = batch_node.run(&mut shared).await;
         assert_eq!(action, Some("default".to_string()));

@@ -9,10 +9,10 @@ use std::collections::HashMap;
 #[test]
 fn test_basic_flow_example_logic() {
     // Recreate the logic from the example to test it in isolation
-    
+
     #[derive(Clone)]
     struct ValidateInputLogic;
-    
+
     impl NodeLogic for ValidateInputLogic {
         fn prep(
             &self,
@@ -44,10 +44,10 @@ fn test_basic_flow_example_logic() {
             Box::new(self.clone())
         }
     }
-    
+
     #[derive(Clone)]
     struct GenerateGreetingLogic;
-    
+
     impl NodeLogic for GenerateGreetingLogic {
         fn prep(
             &self,
@@ -77,10 +77,10 @@ fn test_basic_flow_example_logic() {
             Box::new(self.clone())
         }
     }
-    
+
     #[derive(Clone)]
     struct AnalyzeSentimentLogic;
-    
+
     impl NodeLogic for AnalyzeSentimentLogic {
         fn prep(
             &self,
@@ -92,7 +92,11 @@ fn test_basic_flow_example_logic() {
 
         fn exec(&self, input: NodeValue) -> NodeValue {
             let name = input.as_str().unwrap_or("Guest");
-            let sentiment = if name == "Guest" { "neutral" } else { "positive" };
+            let sentiment = if name == "Guest" {
+                "neutral"
+            } else {
+                "positive"
+            };
             sentiment.into()
         }
 
@@ -111,10 +115,10 @@ fn test_basic_flow_example_logic() {
             Box::new(self.clone())
         }
     }
-    
+
     #[derive(Clone)]
     struct PositiveResponseLogic;
-    
+
     impl NodeLogic for PositiveResponseLogic {
         fn prep(
             &self,
@@ -142,10 +146,10 @@ fn test_basic_flow_example_logic() {
             Box::new(self.clone())
         }
     }
-    
+
     #[derive(Clone)]
     struct NeutralResponseLogic;
-    
+
     impl NodeLogic for NeutralResponseLogic {
         fn prep(
             &self,
@@ -173,7 +177,7 @@ fn test_basic_flow_example_logic() {
             Box::new(self.clone())
         }
     }
-    
+
     // Test with custom name
     {
         let validate_node = Node::new(ValidateInputLogic);
@@ -186,23 +190,34 @@ fn test_basic_flow_example_logic() {
             .next_on("positive", Executable::Sync(positive_node))
             .next_on("neutral", Executable::Sync(neutral_node));
 
-        let start_node = validate_node
-            .next(Executable::Sync(greeting_node))
-            .next(Executable::Sync(sentiment_with_branches));
+        let greeting_node_with_sentiment =
+            greeting_node.next(Executable::Sync(sentiment_with_branches));
+
+        let start_node = validate_node.next(Executable::Sync(greeting_node_with_sentiment));
 
         let flow = Flow::new(start_node);
         let mut state = HashMap::new();
         state.insert("user_name".to_string(), "Alice".into());
-        
+
         flow.run(&mut state);
-        
+
         // Verify results
         assert_eq!(state.get("user_name"), Some(&json!("Alice")));
-        assert!(state.get("greeting").unwrap().as_str().unwrap().contains("Alice"));
+        assert!(state
+            .get("greeting")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("Alice"));
         assert_eq!(state.get("sentiment"), Some(&json!("positive")));
-        assert!(state.get("response").unwrap().as_str().unwrap().contains("glad"));
+        assert!(state
+            .get("response")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("glad"));
     }
-    
+
     // Test with default name
     {
         let validate_node = Node::new(ValidateInputLogic);
@@ -215,19 +230,30 @@ fn test_basic_flow_example_logic() {
             .next_on("positive", Executable::Sync(positive_node))
             .next_on("neutral", Executable::Sync(neutral_node));
 
-        let start_node = validate_node
-            .next(Executable::Sync(greeting_node))
-            .next(Executable::Sync(sentiment_with_branches));
+        let greeting_node_with_sentiment =
+            greeting_node.next(Executable::Sync(sentiment_with_branches));
+
+        let start_node = validate_node.next(Executable::Sync(greeting_node_with_sentiment));
 
         let flow = Flow::new(start_node);
         let mut state = HashMap::new();
-        
+
         flow.run(&mut state);
-        
+
         // Verify results
         assert_eq!(state.get("user_name"), Some(&json!("Guest")));
-        assert!(state.get("greeting").unwrap().as_str().unwrap().contains("Guest"));
+        assert!(state
+            .get("greeting")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("Guest"));
         assert_eq!(state.get("sentiment"), Some(&json!("neutral")));
-        assert!(state.get("response").unwrap().as_str().unwrap().contains("explore"));
+        assert!(state
+            .get("response")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("explore"));
     }
 }

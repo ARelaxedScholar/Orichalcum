@@ -51,14 +51,14 @@ impl AsyncNode {
     pub fn set_params(&mut self, params: HashMap<String, NodeValue>) {
         self.data.params = params;
     }
-    
+
     /// Chains another node to execute after this node via the "default" action.
     ///
     /// Equivalent to `self.next_on("default", node)`.
     pub fn next(self, node: Executable) -> Self {
         self.next_on("default", node)
     }
-    
+
     /// Chains another node to execute after this node when the specified action is returned.
     ///
     /// If the node already has a successor for the given action, it will be overwritten
@@ -143,7 +143,7 @@ pub trait AsyncNodeLogic: AsAny + Send + Sync + 'static {
         _params: &HashMap<String, NodeValue>,
         _shared: &HashMap<String, NodeValue>,
     ) -> NodeValue;
-    
+
     /// Execute the core logic of the node (async).
     ///
     /// This phase performs the main computation or operation using the
@@ -155,7 +155,7 @@ pub trait AsyncNodeLogic: AsAny + Send + Sync + 'static {
     /// # Returns
     /// A [`NodeValue`] representing the execution result
     async fn exec(&self, _input: NodeValue) -> NodeValue;
-    
+
     /// Post-process results and update shared state (async).
     ///
     /// This final phase can store results in the shared state and
@@ -260,7 +260,7 @@ mod tests {
             next_action: None,
         });
         let node1_with_next = node1.next(Executable::Async(node2));
-        
+
         assert_eq!(node1_with_next.data.successors.len(), 1);
         assert!(node1_with_next.data.successors.contains_key("default"));
     }
@@ -276,7 +276,7 @@ mod tests {
             next_action: None,
         });
         let node1_with_next = node1.next_on("custom", Executable::Async(node2));
-        
+
         assert_eq!(node1_with_next.data.successors.len(), 1);
         assert!(node1_with_next.data.successors.contains_key("custom"));
     }
@@ -289,7 +289,7 @@ mod tests {
         });
         let mut shared = HashMap::new();
         shared.insert("test".to_string(), json!(10));
-        
+
         let action = node.run(&mut shared).await;
         assert_eq!(action, Some("default".to_string()));
         assert_eq!(shared.get("test_prep"), Some(&json!(10)));
@@ -305,10 +305,10 @@ mod tests {
         let mut shared = HashMap::new();
         let mut params = HashMap::new();
         params.insert("param".to_string(), json!("value"));
-        
+
         let action = node.run_with_params(&mut shared, &params).await;
         assert_eq!(action, None); // next_action is None
-        // prep should be null since "test" key doesn't exist in shared
+                                  // prep should be null since "test" key doesn't exist in shared
         assert_eq!(shared.get("test_prep"), Some(&NodeValue::Null));
         assert_eq!(shared.get("test_exec"), Some(&json!("async_processed")));
     }
@@ -317,7 +317,7 @@ mod tests {
     async fn test_async_node_logic_required_methods() {
         #[derive(Clone)]
         struct SimpleAsyncLogic;
-        
+
         #[async_trait]
         impl AsyncNodeLogic for SimpleAsyncLogic {
             async fn prep(
@@ -327,11 +327,11 @@ mod tests {
             ) -> NodeValue {
                 NodeValue::Null
             }
-            
+
             async fn exec(&self, _input: NodeValue) -> NodeValue {
                 NodeValue::Null
             }
-            
+
             async fn post(
                 &self,
                 _shared: &mut HashMap<String, NodeValue>,
@@ -340,24 +340,26 @@ mod tests {
             ) -> Option<String> {
                 None
             }
-            
+
             fn clone_box(&self) -> Box<dyn AsyncNodeLogic> {
                 Box::new(self.clone())
             }
         }
-        
+
         let logic = SimpleAsyncLogic;
         let params = HashMap::new();
         let shared = HashMap::new();
         let mut shared_mut = HashMap::new();
-        
+
         let prep = logic.prep(&params, &shared).await;
         assert_eq!(prep, NodeValue::Null);
-        
+
         let exec = logic.exec(NodeValue::Null).await;
         assert_eq!(exec, NodeValue::Null);
-        
-        let post = logic.post(&mut shared_mut, NodeValue::Null, NodeValue::Null).await;
+
+        let post = logic
+            .post(&mut shared_mut, NodeValue::Null, NodeValue::Null)
+            .await;
         assert_eq!(post, None);
     }
 }

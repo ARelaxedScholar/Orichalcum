@@ -1,5 +1,5 @@
-use crate::core::sync_impl::NodeValue;
 use crate::core::sync_impl::node::{Node, NodeLogic};
+use crate::core::sync_impl::NodeValue;
 use std::collections::HashMap;
 
 /// ------- BatchNode -------------------------------------------------------------
@@ -70,8 +70,8 @@ pub fn new_batch_node<L: NodeLogic + Clone>(logic: L) -> Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Executable;
     use crate::core::sync_impl::flow::Flow;
+    use crate::core::Executable;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -113,12 +113,12 @@ mod tests {
     fn test_batch_logic_creation() {
         let logic = MultiplyLogic;
         let batch_logic = BatchLogic::new(logic);
-        
+
         // BatchLogic should wrap the inner logic
         // We can test this by checking exec behavior
         let items = json!([1, 2, 3]);
         let result = batch_logic.exec(items);
-        
+
         assert!(result.is_array());
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 3);
@@ -131,7 +131,7 @@ mod tests {
     fn test_batch_logic_with_non_array_input() {
         let logic = MultiplyLogic;
         let batch_logic = BatchLogic::new(logic);
-        
+
         // Non-array input should return Null
         let result = batch_logic.exec(json!("not an array"));
         assert!(result.is_null());
@@ -145,7 +145,7 @@ mod tests {
             prep_called: bool,
             post_called: bool,
         }
-        
+
         impl NodeLogic for TrackingLogic {
             fn prep(
                 &self,
@@ -157,11 +157,11 @@ mod tests {
                 // Store self in Box to track? Simpler: return a marker
                 json!("prep_called")
             }
-            
+
             fn exec(&self, input: NodeValue) -> NodeValue {
                 input
             }
-            
+
             fn post(
                 &self,
                 shared: &mut HashMap<String, NodeValue>,
@@ -173,28 +173,28 @@ mod tests {
                 shared.insert("post_called".to_string(), json!(true));
                 Some("default".to_string())
             }
-            
+
             fn clone_box(&self) -> Box<dyn NodeLogic> {
                 Box::new(self.clone())
             }
         }
-        
+
         let inner_logic = TrackingLogic {
             prep_called: false,
             post_called: false,
         };
-        
+
         let batch_logic = BatchLogic::new(inner_logic.clone());
         let params = HashMap::new();
         let shared = HashMap::new();
         let mut shared_mut = HashMap::new();
-        
+
         let prep_result = batch_logic.prep(&params, &shared);
         assert_eq!(prep_result, json!("prep_called"));
-        
+
         let exec_result = batch_logic.exec(json!([1, 2, 3]));
         assert!(exec_result.is_array());
-        
+
         let post_result = batch_logic.post(&mut shared_mut, prep_result, exec_result);
         assert_eq!(post_result, Some("default".to_string()));
         assert_eq!(shared_mut.get("post_called"), Some(&json!(true)));
@@ -206,15 +206,15 @@ mod tests {
     fn test_new_batch_node() {
         let logic = MultiplyLogic;
         let mut batch_node = new_batch_node(logic);
-        
+
         // Should create a Node with BatchLogic inside
         let mut shared = HashMap::new();
         let items = json!([1, 2, 3]);
         let mut params = HashMap::new();
         params.insert("items".to_string(), items.clone());
-        
+
         batch_node.set_params(params);
-        
+
         // When we run the node, it will use prep/exec/post
         // Since our MultiplyLogic doesn't use params/shared in prep,
         // and returns Some("default") from post, we can test exec via run_with_params
@@ -226,10 +226,10 @@ mod tests {
     fn test_batch_node_in_flow() {
         // Test that a batch node can be used in a flow
         let batch_node = new_batch_node(MultiplyLogic);
-        
+
         #[derive(Clone)]
         struct PrepareItemsLogic;
-        
+
         impl NodeLogic for PrepareItemsLogic {
             fn prep(
                 &self,
@@ -238,11 +238,11 @@ mod tests {
             ) -> NodeValue {
                 json!([1, 2, 3, 4, 5])
             }
-            
+
             fn exec(&self, input: NodeValue) -> NodeValue {
                 input
             }
-            
+
             fn post(
                 &self,
                 shared: &mut HashMap<String, NodeValue>,
@@ -253,20 +253,19 @@ mod tests {
                 shared.insert("exec_input".to_string(), exec_res);
                 Some("default".to_string())
             }
-            
+
             fn clone_box(&self) -> Box<dyn NodeLogic> {
                 Box::new(self.clone())
             }
         }
-        
-        let prepare_node = Node::new(PrepareItemsLogic)
-            .next(Executable::Sync(batch_node));
-        
+
+        let prepare_node = Node::new(PrepareItemsLogic).next(Executable::Sync(batch_node));
+
         let flow = Flow::new(prepare_node);
         let mut shared = HashMap::new();
-        
+
         let action = flow.run(&mut shared);
-        
+
         // The batch node should have processed the items
         // We can check that items were stored (though batch node doesn't modify shared)
         assert_eq!(action, Some("default".to_string()));
