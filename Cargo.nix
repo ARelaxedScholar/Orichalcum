@@ -93,7 +93,7 @@ else
   {
     cargo2nixVersion = "0.12.0";
     workspace = {
-      orichalcum = rustPackages.unknown.orichalcum."0.2.5";
+      orichalcum = rustPackages.unknown.orichalcum."0.3.0";
     };
     "registry+https://github.com/rust-lang/crates.io-index".android_system_properties."0.1.5" =
       overridableMkRustCrate
@@ -2296,9 +2296,9 @@ else
           };
         });
 
-    "unknown".orichalcum."0.2.5" = overridableMkRustCrate (profileName: rec {
+    "unknown".orichalcum."0.3.0" = overridableMkRustCrate (profileName: rec {
       name = "orichalcum";
-      version = "0.2.5";
+      version = "0.3.0";
       registry = "unknown";
       src = fetchCrateLocal workspaceSrc;
       features = builtins.concatLists [

@@ -1,0 +1,36 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.3.0] - 2025-12-26
+
+### Added
+- AsyncFlow: full asynchronous flow implementation for async node orchestration
+- AsyncNode: asynchronous node logic with async trait support
+- AsyncBatchNode: batch processing for async nodes
+- AsyncParallelBatchNode: parallel batch processing for async nodes
+- Flake.nix and cargo2nix support for Nix users
+- More professional README with comprehensive examples
+- Convenience function to get successors from any node
+- Edit function to Ollama LLM client (feature-gated)
+
+### Changed
+- Node now expects `Executable` instead of `Node` as next step, enabling mixed sync/async workflows
+- Flow is now aware of `Executable` types (though synchronous flow still only handles sync nodes)
+- Improved internal architecture with better separation of sync and async implementations
+
+### Fixed
+- Fixed lifetime errors in AsyncFlow implementation
+- Fixed logic for sequential async batch processing
+- Fixed trait bound on wrong struct that broke client-side functionality
+- Cleaned up code with clippy fixes
+
+### Notes
+- This release introduces a complete async counterpart to the existing synchronous API.
+- The async API is feature-complete with parallel batch processing capabilities.
+- The crate now supports Nix-based development environments via flake.nix.

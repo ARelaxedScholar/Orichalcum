@@ -29,7 +29,7 @@
         # This section defines the "developer workshop"
         devShells.default = pkgs.mkShell {
           # Pulls in all build dependencies (rustc, cargo)
-          # from your 'orichalcum' package.
+          # from 'orichalcum' package.
           inputsFrom = [ packages.orichalcum ];
 
           nativeBuildInputs = [
