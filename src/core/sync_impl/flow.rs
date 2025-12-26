@@ -134,3 +134,275 @@ impl NodeLogic for FlowLogic {
         Box::new((*self).clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::sync_impl::node::NodeLogic;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[derive(Clone)]
+    struct SimpleLogic {
+        id: String,
+        next_action: Option<String>,
+    }
+
+    impl NodeLogic for SimpleLogic {
+        fn prep(
+            &self,
+            _params: &HashMap<String, NodeValue>,
+            _shared: &HashMap<String, NodeValue>,
+        ) -> NodeValue {
+            json!(self.id.clone())
+        }
+
+        fn exec(&self, input: NodeValue) -> NodeValue {
+            // Just pass through
+            input
+        }
+
+        fn post(
+            &self,
+            shared: &mut HashMap<String, NodeValue>,
+            prep_res: NodeValue,
+            _exec_res: NodeValue,
+        ) -> Option<String> {
+            // Store the node ID in shared state
+            let id = prep_res.as_str().unwrap_or("unknown");
+            shared.insert(format!("visited_{}", id), json!(true));
+            
+            // Return the next action or None to terminate
+            self.next_action.clone()
+        }
+
+        fn clone_box(&self) -> Box<dyn NodeLogic> {
+            Box::new(self.clone())
+        }
+    }
+
+    #[test]
+    fn test_flow_creation() {
+        let node = Node::new(SimpleLogic {
+            id: "test".to_string(),
+            next_action: None,
+        });
+        let flow = Flow::new(node);
+        
+        // Flow should deref to Node
+        assert!(flow.data.params.is_empty());
+    }
+
+    #[test]
+    fn test_flow_single_node() {
+        let node = Node::new(SimpleLogic {
+            id: "single".to_string(),
+            next_action: None, // Terminal node
+        });
+        let flow = Flow::new(node);
+        let mut shared = HashMap::new();
+        
+        let action = flow.run(&mut shared);
+        
+        // Flow should have visited the single node
+        assert_eq!(shared.get("visited_single"), Some(&json!(true)));
+        // Flow's action should be from the node (None -> "default"? Actually flow returns Some("default")?)
+        // The flow returns the last action which would be "default" since node returns None
+        // and flow's post converts None to "default"
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[test]
+    fn test_flow_chain() {
+        // Create a chain: node1 -> node2 -> node3
+        let node3 = Node::new(SimpleLogic {
+            id: "node3".to_string(),
+            next_action: None,
+        });
+        
+        let node2 = Node::new(SimpleLogic {
+            id: "node2".to_string(),
+            next_action: Some("default".to_string()),
+        }).next(Executable::Sync(node3));
+        
+        let node1 = Node::new(SimpleLogic {
+            id: "node1".to_string(),
+            next_action: Some("default".to_string()),
+        }).next(Executable::Sync(node2));
+        
+        let flow = Flow::new(node1);
+        let mut shared = HashMap::new();
+        
+        let action = flow.run(&mut shared);
+        
+        // All nodes should have been visited
+        assert_eq!(shared.get("visited_node1"), Some(&json!(true)));
+        assert_eq!(shared.get("visited_node2"), Some(&json!(true)));
+        assert_eq!(shared.get("visited_node3"), Some(&json!(true)));
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[test]
+    fn test_flow_branching() {
+        // Create branching: node1 branches to either node2a or node2b
+        let node2b = Node::new(SimpleLogic {
+            id: "node2b".to_string(),
+            next_action: None,
+        });
+        
+        let node2a = Node::new(SimpleLogic {
+            id: "node2a".to_string(),
+            next_action: None,
+        });
+        
+        #[derive(Clone)]
+        struct BranchingLogic {
+            branch_to: String,
+        }
+        
+        impl NodeLogic for BranchingLogic {
+            fn prep(
+                &self,
+                _params: &HashMap<String, NodeValue>,
+                _shared: &HashMap<String, NodeValue>,
+            ) -> NodeValue {
+                json!(self.branch_to.clone())
+            }
+            
+            fn exec(&self, input: NodeValue) -> NodeValue {
+                input
+            }
+            
+            fn post(
+                &self,
+                shared: &mut HashMap<String, NodeValue>,
+                prep_res: NodeValue,
+                _exec_res: NodeValue,
+            ) -> Option<String> {
+                let branch = prep_res.as_str().unwrap_or("default");
+                shared.insert("branch_taken".to_string(), json!(branch));
+                Some(branch.to_string())
+            }
+            
+            fn clone_box(&self) -> Box<dyn NodeLogic> {
+                Box::new(self.clone())
+            }
+        }
+        
+        let node1 = Node::new(BranchingLogic {
+            branch_to: "branch_a".to_string(),
+        })
+        .next_on("branch_a", Executable::Sync(node2a))
+        .next_on("branch_b", Executable::Sync(node2b));
+        
+        let flow = Flow::new(node1);
+        let mut shared = HashMap::new();
+        
+        let action = flow.run(&mut shared);
+        
+        // Should have taken branch_a
+        assert_eq!(shared.get("branch_taken"), Some(&json!("branch_a")));
+        assert_eq!(shared.get("visited_node2a"), Some(&json!(true)));
+        assert!(shared.get("visited_node2b").is_none());
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[test]
+    fn test_flow_with_params() {
+        #[derive(Clone)]
+        struct ParamLogic;
+        
+        impl NodeLogic for ParamLogic {
+            fn prep(
+                &self,
+                params: &HashMap<String, NodeValue>,
+                _shared: &HashMap<String, NodeValue>,
+            ) -> NodeValue {
+                params.get("test_param").cloned().unwrap_or(NodeValue::Null)
+            }
+            
+            fn exec(&self, input: NodeValue) -> NodeValue {
+                // Return the input value
+                input
+            }
+            
+            fn post(
+                &self,
+                shared: &mut HashMap<String, NodeValue>,
+                prep_res: NodeValue,
+                _exec_res: NodeValue,
+            ) -> Option<String> {
+                shared.insert("received_param".to_string(), prep_res);
+                None
+            }
+            
+            fn clone_box(&self) -> Box<dyn NodeLogic> {
+                Box::new(self.clone())
+            }
+        }
+        
+        let node = Node::new(ParamLogic);
+        let flow = Flow::new(node);
+        let mut shared = HashMap::new();
+        let mut params = HashMap::new();
+        params.insert("test_param".to_string(), json!("test_value"));
+        
+        // Set params on the flow's internal node
+        let mut flow_clone = flow.clone();
+        flow_clone.set_params(params);
+        
+        let action = flow_clone.run(&mut shared);
+        
+        // Should have received the parameter
+        assert_eq!(shared.get("received_param"), Some(&json!("test_value")));
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[test]
+    #[should_panic(expected = "Flow cannot handle AsyncNode")]
+    fn test_flow_panics_on_async_node() {
+        use crate::core::async_impl::async_node::AsyncNode;
+        
+        #[derive(Clone)]
+        struct AsyncTestLogic;
+        
+        impl crate::core::async_impl::async_node::AsyncNodeLogic for AsyncTestLogic {
+            fn clone_box(&self) -> Box<dyn crate::core::async_impl::async_node::AsyncNodeLogic> {
+                Box::new(self.clone())
+            }
+            
+            async fn prep(
+                &self,
+                _params: &HashMap<String, NodeValue>,
+                _shared: &HashMap<String, NodeValue>,
+            ) -> NodeValue {
+                NodeValue::Null
+            }
+            
+            async fn exec(&self, _input: NodeValue) -> NodeValue {
+                NodeValue::Null
+            }
+            
+            async fn post(
+                &self,
+                _shared: &mut HashMap<String, NodeValue>,
+                _prep_res: NodeValue,
+                _exec_res: NodeValue,
+            ) -> Option<String> {
+                Some("default".to_string())
+            }
+        }
+        
+        let async_node = AsyncNode::new(AsyncTestLogic);
+        let node = Node::new(SimpleLogic {
+            id: "test".to_string(),
+            next_action: Some("default".to_string()),
+        }).next(Executable::Async(async_node));
+        
+        let flow = Flow::new(node);
+        let mut shared = HashMap::new();
+        
+        // This should panic when it encounters the async node
+        flow.run(&mut shared);
+    }
+}

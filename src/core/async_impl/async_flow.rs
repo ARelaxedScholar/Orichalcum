@@ -165,3 +165,318 @@ impl AsyncNodeLogic for AsyncFlowLogic {
         Box::new((*self).clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::async_impl::async_node::AsyncNodeLogic;
+    use crate::core::sync_impl::node::{Node, NodeLogic};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[derive(Clone)]
+    struct SimpleAsyncLogic {
+        id: String,
+        next_action: Option<String>,
+    }
+
+    #[async_trait]
+    impl AsyncNodeLogic for SimpleAsyncLogic {
+        async fn prep(
+            &self,
+            _params: &HashMap<String, NodeValue>,
+            _shared: &HashMap<String, NodeValue>,
+        ) -> NodeValue {
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+            json!(self.id.clone())
+        }
+
+        async fn exec(&self, input: NodeValue) -> NodeValue {
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+            input
+        }
+
+        async fn post(
+            &self,
+            shared: &mut HashMap<String, NodeValue>,
+            prep_res: NodeValue,
+            _exec_res: NodeValue,
+        ) -> Option<String> {
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+            let id = prep_res.as_str().unwrap_or("unknown");
+            shared.insert(format!("visited_{}", id), json!(true));
+            self.next_action.clone()
+        }
+
+        fn clone_box(&self) -> Box<dyn AsyncNodeLogic> {
+            Box::new(self.clone())
+        }
+    }
+
+    #[derive(Clone)]
+    struct SimpleSyncLogic {
+        id: String,
+        next_action: Option<String>,
+    }
+
+    impl NodeLogic for SimpleSyncLogic {
+        fn prep(
+            &self,
+            _params: &HashMap<String, NodeValue>,
+            _shared: &HashMap<String, NodeValue>,
+        ) -> NodeValue {
+            json!(self.id.clone())
+        }
+
+        fn exec(&self, input: NodeValue) -> NodeValue {
+            input
+        }
+
+        fn post(
+            &self,
+            shared: &mut HashMap<String, NodeValue>,
+            prep_res: NodeValue,
+            _exec_res: NodeValue,
+        ) -> Option<String> {
+            let id = prep_res.as_str().unwrap_or("unknown");
+            shared.insert(format!("visited_{}", id), json!(true));
+            self.next_action.clone()
+        }
+
+        fn clone_box(&self) -> Box<dyn NodeLogic> {
+            Box::new(self.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_flow_creation() {
+        let async_node = AsyncNode::new(SimpleAsyncLogic {
+            id: "test".to_string(),
+            next_action: None,
+        });
+        let flow = AsyncFlow::new(Executable::Async(async_node));
+        
+        // Flow should deref to AsyncNode
+        assert!(flow.data.params.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_async_flow_single_async_node() {
+        let async_node = AsyncNode::new(SimpleAsyncLogic {
+            id: "single".to_string(),
+            next_action: None,
+        });
+        let flow = AsyncFlow::new(Executable::Async(async_node));
+        let mut shared = HashMap::new();
+        
+        let action = flow.run(&mut shared).await;
+        
+        assert_eq!(shared.get("visited_single"), Some(&json!(true)));
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_async_flow_single_sync_node() {
+        let sync_node = Node::new(SimpleSyncLogic {
+            id: "sync_single".to_string(),
+            next_action: None,
+        });
+        let flow = AsyncFlow::new(Executable::Sync(sync_node));
+        let mut shared = HashMap::new();
+        
+        let action = flow.run(&mut shared).await;
+        
+        assert_eq!(shared.get("visited_sync_single"), Some(&json!(true)));
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_async_flow_mixed_nodes() {
+        // Create a chain: async -> sync -> async
+        let node3 = AsyncNode::new(SimpleAsyncLogic {
+            id: "async3".to_string(),
+            next_action: None,
+        });
+        
+        let node2 = Node::new(SimpleSyncLogic {
+            id: "sync2".to_string(),
+            next_action: Some("default".to_string()),
+        }).next(Executable::Async(node3));
+        
+        let node1 = AsyncNode::new(SimpleAsyncLogic {
+            id: "async1".to_string(),
+            next_action: Some("default".to_string()),
+        }).next(Executable::Sync(node2));
+        
+        let flow = AsyncFlow::new(Executable::Async(node1));
+        let mut shared = HashMap::new();
+        
+        let action = flow.run(&mut shared).await;
+        
+        // All nodes should have been visited
+        assert_eq!(shared.get("visited_async1"), Some(&json!(true)));
+        assert_eq!(shared.get("visited_sync2"), Some(&json!(true)));
+        assert_eq!(shared.get("visited_async3"), Some(&json!(true)));
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_async_flow_branching() {
+        // Create branching with mixed node types
+        let async_branch = AsyncNode::new(SimpleAsyncLogic {
+            id: "async_branch".to_string(),
+            next_action: None,
+        });
+        
+        let sync_branch = Node::new(SimpleSyncLogic {
+            id: "sync_branch".to_string(),
+            next_action: None,
+        });
+        
+        #[derive(Clone)]
+        struct BranchingAsyncLogic {
+            branch_to: String,
+        }
+        
+        #[async_trait]
+        impl AsyncNodeLogic for BranchingAsyncLogic {
+            async fn prep(
+                &self,
+                _params: &HashMap<String, NodeValue>,
+                _shared: &HashMap<String, NodeValue>,
+            ) -> NodeValue {
+                json!(self.branch_to.clone())
+            }
+            
+            async fn exec(&self, input: NodeValue) -> NodeValue {
+                input
+            }
+            
+            async fn post(
+                &self,
+                shared: &mut HashMap<String, NodeValue>,
+                prep_res: NodeValue,
+                _exec_res: NodeValue,
+            ) -> Option<String> {
+                let branch = prep_res.as_str().unwrap_or("default");
+                shared.insert("branch_taken".to_string(), json!(branch));
+                Some(branch.to_string())
+            }
+            
+            fn clone_box(&self) -> Box<dyn AsyncNodeLogic> {
+                Box::new(self.clone())
+            }
+        }
+        
+        let start = AsyncNode::new(BranchingAsyncLogic {
+            branch_to: "async".to_string(),
+        })
+        .next_on("async", Executable::Async(async_branch))
+        .next_on("sync", Executable::Sync(sync_branch));
+        
+        let flow = AsyncFlow::new(Executable::Async(start));
+        let mut shared = HashMap::new();
+        
+        let action = flow.run(&mut shared).await;
+        
+        // Should have taken async branch
+        assert_eq!(shared.get("branch_taken"), Some(&json!("async")));
+        assert_eq!(shared.get("visited_async_branch"), Some(&json!(true)));
+        assert!(shared.get("visited_sync_branch").is_none());
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_async_flow_with_params() {
+        #[derive(Clone)]
+        struct ParamAsyncLogic;
+        
+        #[async_trait]
+        impl AsyncNodeLogic for ParamAsyncLogic {
+            async fn prep(
+                &self,
+                params: &HashMap<String, NodeValue>,
+                _shared: &HashMap<String, NodeValue>,
+            ) -> NodeValue {
+                params.get("test_param").cloned().unwrap_or(NodeValue::Null)
+            }
+            
+            async fn exec(&self, input: NodeValue) -> NodeValue {
+                input
+            }
+            
+            async fn post(
+                &self,
+                shared: &mut HashMap<String, NodeValue>,
+                prep_res: NodeValue,
+                _exec_res: NodeValue,
+            ) -> Option<String> {
+                shared.insert("received_param".to_string(), prep_res);
+                None
+            }
+            
+            fn clone_box(&self) -> Box<dyn AsyncNodeLogic> {
+                Box::new(self.clone())
+            }
+        }
+        
+        let async_node = AsyncNode::new(ParamAsyncLogic);
+        let flow = AsyncFlow::new(Executable::Async(async_node));
+        let mut shared = HashMap::new();
+        let mut params = HashMap::new();
+        params.insert("test_param".to_string(), json!("test_value"));
+        
+        // Set params on the flow's internal node
+        let mut flow_clone = flow.clone();
+        flow_clone.set_params(params);
+        
+        let action = flow_clone.run(&mut shared).await;
+        
+        assert_eq!(shared.get("received_param"), Some(&json!("test_value")));
+        assert_eq!(action, Some("default".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_async_flow_sync_node_panic_handling() {
+        #[derive(Clone)]
+        struct PanicSyncLogic;
+        
+        impl NodeLogic for PanicSyncLogic {
+            fn prep(
+                &self,
+                _params: &HashMap<String, NodeValue>,
+                _shared: &HashMap<String, NodeValue>,
+            ) -> NodeValue {
+                NodeValue::Null
+            }
+            
+            fn exec(&self, _input: NodeValue) -> NodeValue {
+                NodeValue::Null
+            }
+            
+            fn post(
+                &self,
+                _shared: &mut HashMap<String, NodeValue>,
+                _prep_res: NodeValue,
+                _exec_res: NodeValue,
+            ) -> Option<String> {
+                panic!("Sync node panicked!");
+            }
+            
+            fn clone_box(&self) -> Box<dyn NodeLogic> {
+                Box::new(self.clone())
+            }
+        }
+        
+        let sync_node = Node::new(PanicSyncLogic);
+        let flow = AsyncFlow::new(Executable::Sync(sync_node));
+        let mut shared = HashMap::new();
+        
+        // This should not panic in the test, but the sync node panic should be caught
+        // and logged, resulting in "default" action
+        let action = flow.run(&mut shared).await;
+        
+        // The flow should handle the panic and continue with default action
+        assert_eq!(action, Some("default".to_string()));
+    }
+}

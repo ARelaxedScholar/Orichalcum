@@ -1,3 +1,12 @@
+//! Synchronous implementation of the Orichalcum workflow engine.
+//!
+//! This module contains all synchronous types and traits for building
+//! and executing workflows:
+//! - [`Node`] and [`NodeLogic`] for defining individual workflow steps
+//! - [`Flow`] for orchestrating multiple nodes
+//! - [`BatchLogic`] and [`new_batch_node`] for batch processing
+//! - [`NodeValue`] type alias for JSON values used in shared state
+
 pub mod batch_flow;
 pub mod batch_node;
 pub mod flow;

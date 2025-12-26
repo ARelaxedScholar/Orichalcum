@@ -13,7 +13,7 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust,no_run
+//! ```rust
 //! use orichalcum::prelude::*;
 //! use std::collections::HashMap;
 //!
@@ -45,6 +45,9 @@
 //! let mut flow = Flow::new(node);
 //! let mut state = HashMap::new();
 //! flow.run(&mut state);
+//! 
+//! // Verify the result
+//! assert_eq!(state.get("result").unwrap().as_str().unwrap(), "done");
 //! ```
 //!
 //! ## Module Organization
