@@ -36,6 +36,7 @@
             pkgs.rust-analyzer
             pkgs.cargo-edit
             pkgs.rustfmt
+            pkgs.cargo2nix
           ];
         };
       }
