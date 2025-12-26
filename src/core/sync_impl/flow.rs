@@ -139,6 +139,7 @@ impl NodeLogic for FlowLogic {
 mod tests {
     use super::*;
     use crate::core::sync_impl::node::NodeLogic;
+    use async_trait::async_trait;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -366,6 +367,7 @@ mod tests {
         #[derive(Clone)]
         struct AsyncTestLogic;
         
+        #[async_trait]
         impl crate::core::async_impl::async_node::AsyncNodeLogic for AsyncTestLogic {
             fn clone_box(&self) -> Box<dyn crate::core::async_impl::async_node::AsyncNodeLogic> {
                 Box::new(self.clone())

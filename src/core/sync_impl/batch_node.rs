@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn test_new_batch_node() {
         let logic = MultiplyLogic;
-        let batch_node = new_batch_node(logic);
+        let mut batch_node = new_batch_node(logic);
         
         // Should create a Node with BatchLogic inside
         let mut shared = HashMap::new();
