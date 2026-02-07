@@ -223,6 +223,14 @@ impl<O, D> Client<Providers<O, D, Enabled>> {
             config.api_key = api_key.into();
         }
     }
+
+    
+    /// Update the Gemini base URL
+    pub fn edit_gemini_base_url(&mut self, base_url: impl Into<String>) {
+        if let Some(ref mut config) = self.gemini_config {
+            config.base_url = base_url.into();
+        }
+    }
 }
 
 // ============================================================================
