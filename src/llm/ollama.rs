@@ -9,6 +9,24 @@ use crate::llm::{error::LLMError, Client, HasProvider};
 /// Marker type for Ollama provider
 pub struct Ollama;
 
+/// Configuration for Ollama client
+#[derive(Clone, Debug)]
+pub struct OllamaConfig {
+    /// Ollama server URL (default: http://localhost:11434)
+    pub host: String,
+    /// Default model to use (default: phi4)
+    pub default_model: String,
+}
+
+impl Default for OllamaConfig {
+    fn default() -> Self {
+        Self {
+            host: "http://localhost:11434".to_string(),
+            default_model: "phi4".to_string(),
+        }
+    }
+}
+
 /// Response from Ollama's generate endpoint
 #[derive(Debug, Deserialize)]
 pub struct OllamaResponse {
@@ -85,6 +103,8 @@ pub struct OllamaOptions {
     pub top_k: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub num_predict: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
 }
 
 /// Response from Ollama's chat endpoint
@@ -114,34 +134,89 @@ use std::pin::Pin;
 /// Builder for Ollama chat completions
 pub struct OllamaCompletionBuilder<'a, S> {
     client: &'a Client<S>,
-    model: String,
-    system_prompt: String,
-    user_prompt: String,
+    model: Option<String>,
+    messages: Vec<OllamaMessage>,
     temperature: Option<f32>,
+    top_p: Option<f32>,
+    top_k: Option<u32>,
+    max_tokens: Option<u32>,
+    stop_sequences: Option<Vec<String>>,
 }
 
 impl<'a, S> OllamaCompletionBuilder<'a, S>
 where
     S: HasProvider<Ollama> + Send + Sync + 'static,
 {
-    pub fn new(
-        client: &'a Client<S>,
-        model: impl Into<String>,
-        system_prompt: impl Into<String>,
-        user_prompt: impl Into<String>,
-    ) -> Self {
+    pub fn new(client: &'a Client<S>) -> Self {
         Self {
             client,
-            model: model.into(),
-            system_prompt: system_prompt.into(),
-            user_prompt: user_prompt.into(),
+            model: None,
+            messages: Vec::new(),
             temperature: None,
+            top_p: None,
+            top_k: None,
+            max_tokens: None,
+            stop_sequences: None,
         }
+    }
+
+    /// Set the model for this completion (overrides default)
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Add a system message
+    pub fn system(mut self, content: impl Into<String>) -> Self {
+        self.messages.push(OllamaMessage::system(content));
+        self
+    }
+
+    /// Add a user message
+    pub fn user(mut self, content: impl Into<String>) -> Self {
+        self.messages.push(OllamaMessage::user(content));
+        self
+    }
+
+    /// Add an assistant message
+    pub fn assistant(mut self, content: impl Into<String>) -> Self {
+        self.messages.push(OllamaMessage::assistant(content));
+        self
+    }
+
+    /// Seed the conversation with existing messages
+    pub fn messages(mut self, messages: Vec<OllamaMessage>) -> Self {
+        self.messages.extend(messages);
+        self
     }
 
     /// Set the sampling temperature
     pub fn temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the top-p sampling value
+    pub fn top_p(mut self, top_p: f32) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+
+    /// Set the top-k sampling value
+    pub fn top_k(mut self, top_k: u32) -> Self {
+        self.top_k = Some(top_k);
+        self
+    }
+
+    /// Set the maximum number of tokens to generate
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Set stop sequences
+    pub fn stop_sequences(mut self, sequences: Vec<String>) -> Self {
+        self.stop_sequences = Some(sequences);
         self
     }
 }
@@ -155,31 +230,90 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let messages = vec![
-                OllamaMessage::system(self.system_prompt),
-                OllamaMessage::user(self.user_prompt),
-            ];
+            let config = self.client.ollama_config.as_ref().ok_or_else(|| {
+                LLMError::ProviderNotConfigured("Ollama not configured".to_string())
+            })?;
 
-            let options = self.temperature.map(|t| OllamaOptions {
-                temperature: Some(t),
-                top_p: None,
-                top_k: None,
-                num_predict: None,
+            let model_to_use = self.model.unwrap_or_else(|| config.default_model.clone());
+
+            // Implicit validation
+            let mut cache = self.client.model_cache.ollama.read().unwrap().clone();
+            if cache.is_none() {
+                if let Ok(models) = self.client.ollama_list_models().await {
+                    let names: Vec<String> = models.into_iter().map(|m| m.name).collect();
+                    *self.client.model_cache.ollama.write().unwrap() = Some(names.clone());
+                    cache = Some(names);
+                } else {
+                    log::warn!("Could not validate Ollama model: failed to fetch model list");
+                }
+            }
+
+            if let Some(valid_models) = cache {
+                if !valid_models.contains(&model_to_use) {
+                    return Err(LLMError::InvalidModel(format!(
+                        "Model '{}' not found in Ollama available models",
+                        model_to_use
+                    )));
+                }
+            }
+
+            let options = Some(OllamaOptions {
+                temperature: self.temperature,
+                top_p: self.top_p,
+                top_k: self.top_k,
+                num_predict: self.max_tokens,
+                stop: self.stop_sequences,
             });
 
             let response = self
                 .client
-                .call_ollama_chat(self.model, messages, options)
+                .call_ollama_chat(model_to_use, self.messages, options)
                 .await?;
             Ok(response.message.content)
         })
     }
 }
 
+/// Model information from Ollama
+#[derive(Debug, Deserialize)]
+pub struct OllamaModel {
+    pub name: String,
+    pub modified_at: DateTime<Utc>,
+    pub size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaModelsResponse {
+    pub models: Vec<OllamaModel>,
+}
+
 impl<S> Client<S>
 where
     S: HasProvider<Ollama> + Clone + Send + Sync + 'static,
 {
+    /// List available models from Ollama
+    pub async fn ollama_list_models(&self) -> Result<Vec<OllamaModel>, LLMError> {
+        let config = self.ollama_config.as_ref().ok_or_else(|| {
+            LLMError::ProviderNotConfigured("Ollama not configured".to_string())
+        })?;
+
+        let response = self
+            .client
+            .get(format!("{}/api/tags", config.host))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(LLMError::OllamaError(format!(
+                "Failed to list models: HTTP {}",
+                response.status()
+            )));
+        }
+
+        let res: OllamaModelsResponse = response.json().await?;
+        Ok(res.models)
+    }
+
     /// Call Ollama's generate endpoint (legacy)
     pub async fn call_ollama(
         &self,
@@ -187,10 +321,9 @@ where
         prompt: impl Into<String>,
         stream: bool,
     ) -> Result<OllamaResponse, LLMError> {
-        let ollama_host: &str = self
-            .ollama_host
-            .as_ref()
-            .ok_or_else(|| LLMError::ProviderNotConfigured("Ollama not configured".to_string()))?;
+        let config = self.ollama_config.as_ref().ok_or_else(|| {
+            LLMError::ProviderNotConfigured("Ollama not configured".to_string())
+        })?;
 
         let payload = json!({
             "model": model.into(),
@@ -200,7 +333,7 @@ where
 
         let response = self
             .client
-            .post(format!("{}/api/generate", ollama_host))
+            .post(format!("{}/api/generate", config.host))
             .json(&payload)
             .send()
             .await?;
@@ -225,10 +358,9 @@ where
         messages: Vec<OllamaMessage>,
         options: Option<OllamaOptions>,
     ) -> Result<OllamaChatResponse, LLMError> {
-        let ollama_host: &str = self
-            .ollama_host
-            .as_ref()
-            .ok_or_else(|| LLMError::ProviderNotConfigured("Ollama not configured".to_string()))?;
+        let config = self.ollama_config.as_ref().ok_or_else(|| {
+            LLMError::ProviderNotConfigured("Ollama not configured".to_string())
+        })?;
 
         let request = OllamaChatRequest {
             model: model.into(),
@@ -239,7 +371,7 @@ where
 
         let response = self
             .client
-            .post(format!("{}/api/chat", ollama_host))
+            .post(format!("{}/api/chat", config.host))
             .json(&request)
             .send()
             .await?;
@@ -261,17 +393,13 @@ where
     ///
     /// # Example
     /// ```ignore
-    /// let result = client.ollama_complete("llama3", "You are a helpful assistant.", "Hello!")
+    /// let result = client.ollama_complete()
+    ///     .user("Hello!")
     ///     .temperature(0.7)
     ///     .await?;
     /// ```
-    pub fn ollama_complete(
-        &self,
-        model: impl Into<String>,
-        system_prompt: impl Into<String>,
-        user_prompt: impl Into<String>,
-    ) -> OllamaCompletionBuilder<'_, S> {
-        OllamaCompletionBuilder::new(self, model, system_prompt, user_prompt)
+    pub fn ollama_complete(&self) -> OllamaCompletionBuilder<'_, S> {
+        OllamaCompletionBuilder::new(self)
     }
 }
 

@@ -16,12 +16,12 @@
 //! let client = Client::new()
 //!     .with_deepseek("your-api-key");
 //!
-//! // Use DeepSeek
-//! let response = client.deepseek_complete(
-//!     "deepseek-chat",
-//!     "You are a helpful assistant.",
-//!     "Hello!"
-//! ).await?;
+//! // Use DeepSeek with the fluent builder
+//! let response = client.deepseek_complete()
+//!     .system("You are a helpful assistant.")
+//!     .user("Hello!")
+//!     .temperature(0.7)
+//!     .await?;
 //! ```
 
 pub mod deepseek;
@@ -30,10 +30,11 @@ pub mod gemini;
 pub mod ollama;
 
 use std::marker::PhantomData;
+use std::sync::{Arc, RwLock};
 
 pub use deepseek::{DeepSeek, DeepSeekConfig, DeepSeekMessage, DeepSeekResponse};
 pub use gemini::{Gemini, GeminiConfig, GeminiContent, GeminiGenerationConfig, GeminiResponse};
-pub use ollama::Ollama;
+pub use ollama::{Ollama, OllamaConfig};
 
 /// LLM client wrapper around reqwest::Client
 /// Uses typestate pattern to track which providers are configured
@@ -43,12 +44,22 @@ pub struct Client<S> {
     pub(crate) client: reqwest::Client,
     /// Marker for the current state (which providers are enabled)
     state: PhantomData<S>,
-    /// Ollama configuration (host URL)
-    pub(crate) ollama_host: Option<String>,
+    /// Ollama configuration
+    pub(crate) ollama_config: Option<OllamaConfig>,
     /// DeepSeek configuration
     pub(crate) deepseek_config: Option<DeepSeekConfig>,
     /// Gemini configuration
     pub(crate) gemini_config: Option<GeminiConfig>,
+    /// Cache for available models to support implicit validation
+    pub(crate) model_cache: ModelCache,
+}
+
+/// Thread-safe cache for provider model lists
+#[derive(Clone, Default)]
+pub struct ModelCache {
+    pub(crate) ollama: Arc<RwLock<Option<Vec<String>>>>,
+    pub(crate) deepseek: Arc<RwLock<Option<Vec<String>>>>,
+    pub(crate) gemini: Arc<RwLock<Option<Vec<String>>>>,
 }
 
 // ============================================================================
@@ -95,9 +106,10 @@ impl Client<Providers<Disabled, Disabled, Disabled>> {
         Client {
             client: reqwest::Client::new(),
             state: PhantomData,
-            ollama_host: None,
+            ollama_config: None,
             deepseek_config: None,
             gemini_config: None,
+            model_cache: ModelCache::default(),
         }
     }
 }
@@ -111,7 +123,7 @@ impl Default for Client<Providers<Disabled, Disabled, Disabled>> {
 // Builder methods that enable providers
 
 impl<D, G> Client<Providers<Disabled, D, G>> {
-    /// Enable Ollama provider with the default host (http://localhost:11434)
+    /// Enable Ollama provider with the default host (http://localhost:11434) and default model (phi4)
     pub fn with_ollama(self) -> Client<Providers<Enabled, D, G>> {
         self.with_ollama_at("http://localhost:11434")
     }
@@ -124,9 +136,13 @@ impl<D, G> Client<Providers<Disabled, D, G>> {
         Client {
             client: self.client,
             state: PhantomData,
-            ollama_host: Some(host.into()),
+            ollama_config: Some(OllamaConfig {
+                host: host.into(),
+                ..Default::default()
+            }),
             deepseek_config: self.deepseek_config,
             gemini_config: self.gemini_config,
+            model_cache: self.model_cache,
         }
     }
 }
@@ -150,12 +166,14 @@ impl<O, G> Client<Providers<O, Disabled, G>> {
         Client {
             client: self.client,
             state: PhantomData,
-            ollama_host: self.ollama_host,
+            ollama_config: self.ollama_config,
             deepseek_config: Some(DeepSeekConfig {
                 api_key: api_key.into(),
                 base_url: base_url.into(),
+                ..Default::default()
             }),
             gemini_config: self.gemini_config,
+            model_cache: self.model_cache,
         }
     }
 }
@@ -179,12 +197,14 @@ impl<O, D> Client<Providers<O, D, Disabled>> {
         Client {
             client: self.client,
             state: PhantomData,
-            ollama_host: self.ollama_host,
+            ollama_config: self.ollama_config,
             deepseek_config: self.deepseek_config,
             gemini_config: Some(GeminiConfig {
                 api_key: api_key.into(),
                 base_url: base_url.into(),
+                ..Default::default()
             }),
+            model_cache: self.model_cache,
         }
     }
 }
@@ -194,9 +214,18 @@ impl<O, D> Client<Providers<O, D, Disabled>> {
 impl<D, G> Client<Providers<Enabled, D, G>> {
     /// Update the Ollama host URL
     pub fn edit_ollama_host(&mut self, host: impl Into<String>) {
-        let new_host = host.into();
-        assert!(!new_host.is_empty(), "Ollama host cannot be empty");
-        self.ollama_host = Some(new_host);
+        if let Some(ref mut config) = self.ollama_config {
+            let new_host = host.into();
+            assert!(!new_host.is_empty(), "Ollama host cannot be empty");
+            config.host = new_host;
+        }
+    }
+
+    /// Update the Ollama default model
+    pub fn edit_ollama_default_model(&mut self, model: impl Into<String>) {
+        if let Some(ref mut config) = self.ollama_config {
+            config.default_model = model.into();
+        }
     }
 }
 
@@ -214,6 +243,13 @@ impl<O, G> Client<Providers<O, Enabled, G>> {
             config.base_url = base_url.into();
         }
     }
+
+    /// Update the DeepSeek default model
+    pub fn edit_deepseek_default_model(&mut self, model: impl Into<String>) {
+        if let Some(ref mut config) = self.deepseek_config {
+            config.default_model = model.into();
+        }
+    }
 }
 
 impl<O, D> Client<Providers<O, D, Enabled>> {
@@ -224,11 +260,17 @@ impl<O, D> Client<Providers<O, D, Enabled>> {
         }
     }
 
-    
     /// Update the Gemini base URL
     pub fn edit_gemini_base_url(&mut self, base_url: impl Into<String>) {
         if let Some(ref mut config) = self.gemini_config {
             config.base_url = base_url.into();
+        }
+    }
+
+    /// Update the Gemini default model
+    pub fn edit_gemini_default_model(&mut self, model: impl Into<String>) {
+        if let Some(ref mut config) = self.gemini_config {
+            config.default_model = model.into();
         }
     }
 }
@@ -257,7 +299,7 @@ mod tests {
     #[test]
     fn test_client_creation() {
         let client = Client::new();
-        assert!(client.ollama_host.is_none());
+        assert!(client.ollama_config.is_none());
         assert!(client.deepseek_config.is_none());
         assert!(client.gemini_config.is_none());
     }
@@ -265,15 +307,15 @@ mod tests {
     #[test]
     fn test_with_ollama() {
         let client = Client::new().with_ollama();
-        assert_eq!(
-            client.ollama_host,
-            Some("http://localhost:11434".to_string())
-        );
+        assert!(client.ollama_config.is_some());
+        let config = client.ollama_config.unwrap();
+        assert_eq!(config.host, "http://localhost:11434");
+        assert_eq!(config.default_model, "phi4");
 
         let client_custom = Client::new().with_ollama_at("http://192.168.1.10:11434");
         assert_eq!(
-            client_custom.ollama_host,
-            Some("http://192.168.1.10:11434".to_string())
+            client_custom.ollama_config.unwrap().host,
+            "http://192.168.1.10:11434"
         );
     }
 
@@ -284,6 +326,7 @@ mod tests {
         let config = client.deepseek_config.unwrap();
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.base_url, "https://api.deepseek.com");
+        assert_eq!(config.default_model, "deepseek-reasoner");
 
         let client_custom = Client::new().with_deepseek_at("test-key", "https://custom.deepseek.com");
         let config_custom = client_custom.deepseek_config.unwrap();
@@ -297,6 +340,7 @@ mod tests {
         let config = client.gemini_config.unwrap();
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.base_url, "https://generativelanguage.googleapis.com");
+        assert_eq!(config.default_model, "gemini-3-flash-preview");
     }
 
     #[test]
@@ -306,7 +350,7 @@ mod tests {
             .with_deepseek("deepseek-key")
             .with_gemini("gemini-key");
 
-        assert!(client.ollama_host.is_some());
+        assert!(client.ollama_config.is_some());
         assert!(client.deepseek_config.is_some());
         assert!(client.gemini_config.is_some());
     }

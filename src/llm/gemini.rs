@@ -16,6 +16,8 @@ pub struct GeminiConfig {
     pub api_key: String,
     /// Base URL (default: https://generativelanguage.googleapis.com)
     pub base_url: String,
+    /// Default model to use (default: gemini-3-flash-preview)
+    pub default_model: String,
 }
 
 impl Default for GeminiConfig {
@@ -23,6 +25,7 @@ impl Default for GeminiConfig {
         Self {
             api_key: String::new(),
             base_url: "https://generativelanguage.googleapis.com".to_string(),
+            default_model: "gemini-3-flash-preview".to_string(),
         }
     }
 }
@@ -149,31 +152,62 @@ use std::pin::Pin;
 /// Builder for Gemini content generation
 pub struct GeminiCompletionBuilder<'a, S> {
     client: &'a Client<S>,
-    model: String,
-    system_prompt: String,
-    user_prompt: String,
+    model: Option<String>,
+    system_prompt: Option<String>,
+    contents: Vec<GeminiContent>,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
+    top_p: Option<f32>,
+    top_k: Option<u32>,
+    stop_sequences: Option<Vec<String>>,
 }
 
 impl<'a, S> GeminiCompletionBuilder<'a, S>
 where
     S: HasProvider<Gemini> + Send + Sync + 'static,
 {
-    pub fn new(
-        client: &'a Client<S>,
-        model: impl Into<String>,
-        system_prompt: impl Into<String>,
-        user_prompt: impl Into<String>,
-    ) -> Self {
+    pub fn new(client: &'a Client<S>) -> Self {
         Self {
             client,
-            model: model.into(),
-            system_prompt: system_prompt.into(),
-            user_prompt: user_prompt.into(),
+            model: None,
+            system_prompt: None,
+            contents: Vec::new(),
             temperature: None,
             max_tokens: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
         }
+    }
+
+    /// Set the model for this completion (overrides default)
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Set the system prompt
+    pub fn system(mut self, content: impl Into<String>) -> Self {
+        self.system_prompt = Some(content.into());
+        self
+    }
+
+    /// Add a user message
+    pub fn user(mut self, content: impl Into<String>) -> Self {
+        self.contents.push(GeminiContent::user(content));
+        self
+    }
+
+    /// Add an assistant (model) message
+    pub fn assistant(mut self, content: impl Into<String>) -> Self {
+        self.contents.push(GeminiContent::model(content));
+        self
+    }
+
+    /// Seed the conversation with existing contents
+    pub fn messages(mut self, contents: Vec<GeminiContent>) -> Self {
+        self.contents.extend(contents);
+        self
     }
 
     /// Set the sampling temperature
@@ -187,6 +221,24 @@ where
         self.max_tokens = Some(max_tokens);
         self
     }
+
+    /// Set the top-p sampling value
+    pub fn top_p(mut self, top_p: f32) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+
+    /// Set the top-k sampling value
+    pub fn top_k(mut self, top_k: u32) -> Self {
+        self.top_k = Some(top_k);
+        self
+    }
+
+    /// Set stop sequences
+    pub fn stop_sequences(mut self, sequences: Vec<String>) -> Self {
+        self.stop_sequences = Some(sequences);
+        self
+    }
 }
 
 impl<'a, S> IntoFuture for GeminiCompletionBuilder<'a, S>
@@ -198,18 +250,59 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let contents = vec![GeminiContent::user(self.user_prompt)];
-            let system_instruction = Some(GeminiContent::system(self.system_prompt));
+            let config = self.client.gemini_config.as_ref().ok_or_else(|| {
+                LLMError::ProviderNotConfigured("Gemini not configured".to_string())
+            })?;
+
+            let model_to_use = self.model.unwrap_or_else(|| config.default_model.clone());
+
+            // Implicit validation
+            let mut cache = self.client.model_cache.gemini.read().unwrap().clone();
+            if cache.is_none() {
+                if let Ok(models) = self.client.gemini_list_models().await {
+                    let names: Vec<String> = models
+                        .into_iter()
+                        .map(|m| {
+                            m.name
+                                .strip_prefix("models/")
+                                .unwrap_or(&m.name)
+                                .to_string()
+                        })
+                        .collect();
+                    *self.client.model_cache.gemini.write().unwrap() = Some(names.clone());
+                    cache = Some(names);
+                } else {
+                    log::warn!("Could not validate Gemini model: failed to fetch model list");
+                }
+            }
+
+            if let Some(valid_models) = cache {
+                if !valid_models.contains(&model_to_use) {
+                    return Err(LLMError::InvalidModel(format!(
+                        "Model '{}' not found in Gemini available models",
+                        model_to_use
+                    )));
+                }
+            }
+
+            let system_instruction = self.system_prompt.map(GeminiContent::system);
 
             let generation_config = Some(GeminiGenerationConfig {
                 temperature: self.temperature,
                 max_output_tokens: self.max_tokens,
-                ..Default::default()
+                top_p: self.top_p,
+                top_k: self.top_k,
+                stop_sequences: self.stop_sequences,
             });
 
             let response = self
                 .client
-                .call_gemini(self.model, contents, system_instruction, generation_config)
+                .call_gemini(
+                    model_to_use,
+                    self.contents,
+                    system_instruction,
+                    generation_config,
+                )
                 .await?;
 
             response
@@ -222,10 +315,45 @@ where
     }
 }
 
+/// Model information from Gemini
+#[derive(Debug, Deserialize)]
+pub struct GeminiModel {
+    pub name: String,
+    pub version: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiModelsResponse {
+    pub models: Vec<GeminiModel>,
+}
+
 impl<S> Client<S>
 where
     S: HasProvider<Gemini> + Clone + Send + Sync + 'static,
 {
+    /// List available models from Gemini
+    pub async fn gemini_list_models(&self) -> Result<Vec<GeminiModel>, LLMError> {
+        let config = self.gemini_config.as_ref().ok_or_else(|| {
+            LLMError::ProviderNotConfigured("Gemini not configured".to_string())
+        })?;
+
+        let url = format!("{}/v1beta/models?key={}", config.base_url, config.api_key);
+
+        let response = self.client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            return Err(LLMError::GeminiError(format!(
+                "Failed to list models: HTTP {}",
+                response.status()
+            )));
+        }
+
+        let res: GeminiModelsResponse = response.json().await?;
+        Ok(res.models)
+    }
+
     /// Call Gemini's generate content API
     ///
     /// # Arguments
@@ -233,18 +361,6 @@ where
     /// * `contents` - Conversation contents
     /// * `system_instruction` - Optional system instruction
     /// * `generation_config` - Optional generation configuration
-    ///
-    /// # Example
-    /// ```ignore
-    /// let client = Client::new().with_gemini("your-api-key");
-    /// let contents = vec![GeminiContent::user("Hello!")];
-    /// let response = client.call_gemini(
-    ///     "gemini-1.5-flash",
-    ///     contents,
-    ///     Some(GeminiContent::system("You are helpful.")),
-    ///     None
-    /// ).await?;
-    /// ```
     pub async fn call_gemini(
         &self,
         model: impl Into<String>,
@@ -293,17 +409,13 @@ where
     ///
     /// # Example
     /// ```ignore
-    /// let result = client.gemini_complete("gemini-1.5-flash", "You are a helpful assistant.", "Hello!")
+    /// let result = client.gemini_complete()
+    ///     .user("Hello!")
     ///     .temperature(0.7)
     ///     .await?;
     /// ```
-    pub fn gemini_complete(
-        &self,
-        model: impl Into<String>,
-        system_prompt: impl Into<String>,
-        user_prompt: impl Into<String>,
-    ) -> GeminiCompletionBuilder<'_, S> {
-        GeminiCompletionBuilder::new(self, model, system_prompt, user_prompt)
+    pub fn gemini_complete(&self) -> GeminiCompletionBuilder<'_, S> {
+        GeminiCompletionBuilder::new(self)
     }
 }
 

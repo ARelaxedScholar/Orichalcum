@@ -22,4 +22,7 @@ pub enum LLMError {
 
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
+
+    #[error("Invalid model: {0}")]
+    InvalidModel(String),
 }

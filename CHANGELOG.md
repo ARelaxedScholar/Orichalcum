@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Builder pattern for LLM completion methods (`deepseek_complete`, `gemini_complete`, `ollama_complete`)
+- Multi-turn fluent message support (`.system()`, `.user()`, `.assistant()`) in builders
+- Implicit model validation with thread-safe caching
 - Convenience default methods for client configuration (`with_deepseek`, `with_gemini`, `with_ollama`)
+- Standardized model selection across all providers with best-in-class defaults (e.g., `gemini-3-flash-preview`, `deepseek-reasoner`, `phi4`)
+- Model discovery API (`list_models`) for each provider
 
 ### Changed
 - Refactored LLM client configuration to use simpler default methods

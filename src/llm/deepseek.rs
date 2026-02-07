@@ -17,6 +17,8 @@ pub struct DeepSeekConfig {
     pub api_key: String,
     /// Base URL (default: https://api.deepseek.com)
     pub base_url: String,
+    /// Default model to use (default: deepseek-reasoner)
+    pub default_model: String,
 }
 
 impl Default for DeepSeekConfig {
@@ -24,6 +26,7 @@ impl Default for DeepSeekConfig {
         Self {
             api_key: String::new(),
             base_url: "https://api.deepseek.com".to_string(),
+            default_model: "deepseek-reasoner".to_string(),
         }
     }
 }
@@ -39,6 +42,8 @@ pub struct DeepSeekRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
     pub stream: bool,
 }
 
@@ -103,31 +108,58 @@ use std::pin::Pin;
 /// Builder for DeepSeek chat completions
 pub struct DeepSeekCompletionBuilder<'a, S> {
     client: &'a Client<S>,
-    model: String,
-    system_prompt: String,
-    user_prompt: String,
+    model: Option<String>,
+    messages: Vec<DeepSeekMessage>,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
+    top_p: Option<f32>,
+    stop_sequences: Option<Vec<String>>,
 }
 
 impl<'a, S> DeepSeekCompletionBuilder<'a, S>
 where
     S: HasProvider<DeepSeek> + Send + Sync + 'static,
 {
-    pub fn new(
-        client: &'a Client<S>,
-        model: impl Into<String>,
-        system_prompt: impl Into<String>,
-        user_prompt: impl Into<String>,
-    ) -> Self {
+    pub fn new(client: &'a Client<S>) -> Self {
         Self {
             client,
-            model: model.into(),
-            system_prompt: system_prompt.into(),
-            user_prompt: user_prompt.into(),
+            model: None,
+            messages: Vec::new(),
             temperature: None,
             max_tokens: None,
+            top_p: None,
+            stop_sequences: None,
         }
+    }
+
+    /// Set the model for this completion (overrides default)
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Add a system message
+    pub fn system(mut self, content: impl Into<String>) -> Self {
+        self.messages.push(DeepSeekMessage::system(content));
+        self
+    }
+
+    /// Add a user message
+    pub fn user(mut self, content: impl Into<String>) -> Self {
+        self.messages.push(DeepSeekMessage::user(content));
+        self
+    }
+
+    /// Add an assistant message
+    pub fn assistant(mut self, content: impl Into<String>) -> Self {
+        self.messages.push(DeepSeekMessage::assistant(content));
+        self
+    }
+
+    /// Seed the conversation with existing messages
+    pub fn messages(mut self, messages: Vec<DeepSeekMessage>) -> Self {
+        self.messages.extend(messages);
+        self
     }
 
     /// Set the sampling temperature
@@ -141,6 +173,18 @@ where
         self.max_tokens = Some(max_tokens);
         self
     }
+
+    /// Set the top-p sampling value
+    pub fn top_p(mut self, top_p: f32) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+
+    /// Set stop sequences
+    pub fn stop_sequences(mut self, sequences: Vec<String>) -> Self {
+        self.stop_sequences = Some(sequences);
+        self
+    }
 }
 
 impl<'a, S> IntoFuture for DeepSeekCompletionBuilder<'a, S>
@@ -152,14 +196,44 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let messages = vec![
-                DeepSeekMessage::system(self.system_prompt),
-                DeepSeekMessage::user(self.user_prompt),
-            ];
+            let config = self.client.deepseek_config.as_ref().ok_or_else(|| {
+                LLMError::ProviderNotConfigured("DeepSeek not configured".to_string())
+            })?;
+
+            let model_to_use = self.model.unwrap_or_else(|| config.default_model.clone());
+
+            // Implicit validation
+            let mut cache = self.client.model_cache.deepseek.read().unwrap().clone();
+            if cache.is_none() {
+                // Try to fetch
+                if let Ok(models) = self.client.deepseek_list_models().await {
+                    let names: Vec<String> = models.into_iter().map(|m| m.id).collect();
+                    *self.client.model_cache.deepseek.write().unwrap() = Some(names.clone());
+                    cache = Some(names);
+                } else {
+                    log::warn!("Could not validate DeepSeek model: failed to fetch model list");
+                }
+            }
+
+            if let Some(valid_models) = cache {
+                if !valid_models.contains(&model_to_use) {
+                    return Err(LLMError::InvalidModel(format!(
+                        "Model '{}' not found in DeepSeek available models",
+                        model_to_use
+                    )));
+                }
+            }
 
             let response = self
                 .client
-                .call_deepseek(self.model, messages, self.temperature, self.max_tokens)
+                .call_deepseek(
+                    model_to_use,
+                    self.messages,
+                    self.temperature,
+                    self.max_tokens,
+                    self.top_p,
+                    self.stop_sequences,
+                )
                 .await?;
 
             response
@@ -171,10 +245,45 @@ where
     }
 }
 
+/// Model information from DeepSeek
+#[derive(Debug, Deserialize)]
+pub struct DeepSeekModel {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepSeekModelsResponse {
+    pub data: Vec<DeepSeekModel>,
+}
+
 impl<S> Client<S>
 where
     S: HasProvider<DeepSeek> + Clone + Send + Sync + 'static,
 {
+    /// List available models from DeepSeek
+    pub async fn deepseek_list_models(&self) -> Result<Vec<DeepSeekModel>, LLMError> {
+        let config = self.deepseek_config.as_ref().ok_or_else(|| {
+            LLMError::ProviderNotConfigured("DeepSeek not configured".to_string())
+        })?;
+
+        let response = self
+            .client
+            .get(format!("{}/v1/models", config.base_url))
+            .header("Authorization", format!("Bearer {}", config.api_key))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(LLMError::DeepSeekError(format!(
+                "Failed to list models: HTTP {}",
+                response.status()
+            )));
+        }
+
+        let res: DeepSeekModelsResponse = response.json().await?;
+        Ok(res.data)
+    }
+
     /// Call DeepSeek's chat completion API
     ///
     /// # Arguments
@@ -182,22 +291,16 @@ where
     /// * `messages` - Conversation messages
     /// * `temperature` - Sampling temperature (0.0 - 2.0)
     /// * `max_tokens` - Maximum tokens to generate
-    ///
-    /// # Example
-    /// ```ignore
-    /// let client = Client::new().with_deepseek("your-api-key");
-    /// let messages = vec![
-    ///     DeepSeekMessage::system("You are a helpful assistant."),
-    ///     DeepSeekMessage::user("Hello!"),
-    /// ];
-    /// let response = client.call_deepseek("deepseek-chat", messages, Some(0.7), None).await?;
-    /// ```
+    /// * `top_p` - Top-p sampling value
+    /// * `stop` - Stop sequences
     pub async fn call_deepseek(
         &self,
         model: impl Into<String>,
         messages: Vec<DeepSeekMessage>,
         temperature: Option<f32>,
         max_tokens: Option<u32>,
+        top_p: Option<f32>,
+        stop: Option<Vec<String>>,
     ) -> Result<DeepSeekResponse, LLMError> {
         let config = self.deepseek_config.as_ref().ok_or_else(|| {
             LLMError::ProviderNotConfigured("DeepSeek not configured".to_string())
@@ -208,7 +311,8 @@ where
             messages,
             temperature,
             max_tokens,
-            top_p: None,
+            top_p,
+            stop,
             stream: false,
         };
 
@@ -238,17 +342,16 @@ where
     ///
     /// # Example
     /// ```ignore
-    /// let result = client.deepseek_complete("deepseek-chat", "You are a helpful assistant.", "Hello!")
-    ///     .temperature(0.7)
-    ///     .await?;
+    /// let client = Client::new().with_deepseek("your-api-key");
+    /// let messages = vec![
+    ///     DeepSeekMessage::system("You are a helpful assistant."),
+    ///     DeepSeekMessage::user("Hello!"),
+    /// ];
+    /// let response = client.call_deepseek("deepseek-chat", messages, Some(0.7), None, None, None).await?;
     /// ```
-    pub fn deepseek_complete(
-        &self,
-        model: impl Into<String>,
-        system_prompt: impl Into<String>,
-        user_prompt: impl Into<String>,
-    ) -> DeepSeekCompletionBuilder<'_, S> {
-        DeepSeekCompletionBuilder::new(self, model, system_prompt, user_prompt)
+
+    pub fn deepseek_complete(&self) -> DeepSeekCompletionBuilder<'_, S> {
+        DeepSeekCompletionBuilder::new(self)
     }
 }
 
@@ -276,6 +379,7 @@ mod tests {
             temperature: Some(0.7),
             max_tokens: None,
             top_p: None,
+            stop: None,
             stream: false,
         };
 
