@@ -1,5 +1,5 @@
 use orichalcum::prelude::*;
-use orichalcum::llm::semantic::signature::Signature;
+use orichalcum::Signature;
 use std::collections::HashMap;
 use std::sync::Arc;
 use serde_json::json;

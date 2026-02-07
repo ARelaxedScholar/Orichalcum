@@ -4,7 +4,7 @@ use crate::core::sync_impl::NodeValue;
 use std::collections::HashMap;
 use crate::core::telemetry::Telemetry;
 use crate::core::semantic::Sealable;
-use crate::llm::semantic::signature::Signature;
+use crate::core::semantic::signature::Signature;
 use futures::future::BoxFuture;
 
 /// An immutable wrapper that encapsulates any executable unit.

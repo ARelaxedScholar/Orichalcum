@@ -1,5 +1,9 @@
-use crate::llm::semantic::signature::Signature;
+pub mod node;
+pub mod registry;
+pub mod signature;
+
 use crate::core::sync_impl::AsAny;
+use signature::Signature;
 
 /// Trait for units that have a defined structural contract and global identity.
 /// Implementing this allows a node or flow to be validated and optimized.
@@ -8,7 +12,6 @@ pub trait Sealable: AsAny + Send + Sync {
     fn signature(&self) -> Signature;
 
     /// Returns a unique identifier for this specific task instance.
-    /// This is used as the primary key for optimization datasets and weights.
     fn task_id(&self) -> String;
 }
 

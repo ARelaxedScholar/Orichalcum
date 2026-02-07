@@ -16,11 +16,11 @@ log = "0.4.28"
 serde_json = "1.0.145"
 thiserror = "2.0.17"
 uuid = { version = "1.16.0", features = ["v4"] }
-parquet = { version = "53.3.0", optional = true }
-arrow = { version = "53.3.0", optional = true }
+parquet = { version = "52.0.0", optional = true }
+arrow = { version = "52.0.0", optional = true }
 
 # Optional Dependencies
-chrono = { version = "0.4.42", features = ["serde"], optional=true }
+chrono = { version = "=0.4.38", features = ["serde"], optional=true }
 reqwest = { version = "0.12.23", features = ["json"], optional=true }
 serde = { version = "1.0.228", features = ["derive"], optional=true}
 async-trait = "0.1.89"

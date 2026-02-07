@@ -10,7 +10,7 @@ use crate::core::sync_impl::NodeValue;
 use crate::core::semantic::{Sealable, Promptable};
 use crate::core::Executable;
 use crate::core::sealed::SealedNode;
-use crate::llm::semantic::signature::Signature;
+use crate::core::semantic::signature::Signature;
 
 /// Vanilla logic for a semantic LLM node.
 #[derive(Clone)]

@@ -7,7 +7,6 @@ pub mod deepseek;
 pub mod error;
 pub mod gemini;
 pub mod ollama;
-pub mod semantic;
 
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
