@@ -143,9 +143,88 @@ pub struct GeminiUsageMetadata {
     pub total_token_count: u32,
 }
 
+use std::future::IntoFuture;
+use std::pin::Pin;
+
+/// Builder for Gemini content generation
+pub struct GeminiCompletionBuilder<'a, S> {
+    client: &'a Client<S>,
+    model: String,
+    system_prompt: String,
+    user_prompt: String,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+}
+
+impl<'a, S> GeminiCompletionBuilder<'a, S>
+where
+    S: HasProvider<Gemini> + Send + Sync + 'static,
+{
+    pub fn new(
+        client: &'a Client<S>,
+        model: impl Into<String>,
+        system_prompt: impl Into<String>,
+        user_prompt: impl Into<String>,
+    ) -> Self {
+        Self {
+            client,
+            model: model.into(),
+            system_prompt: system_prompt.into(),
+            user_prompt: user_prompt.into(),
+            temperature: None,
+            max_tokens: None,
+        }
+    }
+
+    /// Set the sampling temperature
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the maximum number of tokens to generate
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+}
+
+impl<'a, S> IntoFuture for GeminiCompletionBuilder<'a, S>
+where
+    S: HasProvider<Gemini> + Send + Sync + Clone + 'static,
+{
+    type Output = Result<String, LLMError>;
+    type IntoFuture = Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let contents = vec![GeminiContent::user(self.user_prompt)];
+            let system_instruction = Some(GeminiContent::system(self.system_prompt));
+
+            let generation_config = Some(GeminiGenerationConfig {
+                temperature: self.temperature,
+                max_output_tokens: self.max_tokens,
+                ..Default::default()
+            });
+
+            let response = self
+                .client
+                .call_gemini(self.model, contents, system_instruction, generation_config)
+                .await?;
+
+            response
+                .candidates
+                .first()
+                .and_then(|c| c.content.parts.first())
+                .and_then(|p| p.text.clone())
+                .ok_or_else(|| LLMError::InvalidResponse("No text in response".to_string()))
+        })
+    }
+}
+
 impl<S> Client<S>
 where
-    S: HasProvider<Gemini>,
+    S: HasProvider<Gemini> + Clone + Send + Sync + 'static,
 {
     /// Call Gemini's generate content API
     ///
@@ -210,34 +289,21 @@ where
         Ok(gemini_response)
     }
 
-    /// Convenience method for simple single-turn completions
-    pub async fn gemini_complete(
+    /// Convenience method for simple single-turn completions using a builder pattern
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = client.gemini_complete("gemini-1.5-flash", "You are a helpful assistant.", "Hello!")
+    ///     .temperature(0.7)
+    ///     .await?;
+    /// ```
+    pub fn gemini_complete(
         &self,
         model: impl Into<String>,
         system_prompt: impl Into<String>,
         user_prompt: impl Into<String>,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-    ) -> Result<String, LLMError> {
-        let contents = vec![GeminiContent::user(user_prompt)];
-        let system_instruction = Some(GeminiContent::system(system_prompt));
-
-        let generation_config = Some(GeminiGenerationConfig {
-            temperature,
-            max_output_tokens: max_tokens,
-            ..Default::default()
-        });
-
-        let response = self
-            .call_gemini(model, contents, system_instruction, generation_config)
-            .await?;
-
-        response
-            .candidates
-            .first()
-            .and_then(|c| c.content.parts.first())
-            .and_then(|p| p.text.clone())
-            .ok_or_else(|| LLMError::InvalidResponse("No text in response".to_string()))
+    ) -> GeminiCompletionBuilder<'_, S> {
+        GeminiCompletionBuilder::new(self, model, system_prompt, user_prompt)
     }
 }
 

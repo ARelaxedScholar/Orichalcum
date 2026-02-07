@@ -20,9 +20,7 @@
 //! let response = client.deepseek_complete(
 //!     "deepseek-chat",
 //!     "You are a helpful assistant.",
-//!     "Hello!",
-//!     Some(0.7),
-//!     None
+//!     "Hello!"
 //! ).await?;
 //! ```
 

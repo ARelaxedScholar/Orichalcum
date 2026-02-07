@@ -108,9 +108,77 @@ pub struct OllamaChatResponse {
     pub eval_duration: u64,
 }
 
+use std::future::IntoFuture;
+use std::pin::Pin;
+
+/// Builder for Ollama chat completions
+pub struct OllamaCompletionBuilder<'a, S> {
+    client: &'a Client<S>,
+    model: String,
+    system_prompt: String,
+    user_prompt: String,
+    temperature: Option<f32>,
+}
+
+impl<'a, S> OllamaCompletionBuilder<'a, S>
+where
+    S: HasProvider<Ollama> + Send + Sync + 'static,
+{
+    pub fn new(
+        client: &'a Client<S>,
+        model: impl Into<String>,
+        system_prompt: impl Into<String>,
+        user_prompt: impl Into<String>,
+    ) -> Self {
+        Self {
+            client,
+            model: model.into(),
+            system_prompt: system_prompt.into(),
+            user_prompt: user_prompt.into(),
+            temperature: None,
+        }
+    }
+
+    /// Set the sampling temperature
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+}
+
+impl<'a, S> IntoFuture for OllamaCompletionBuilder<'a, S>
+where
+    S: HasProvider<Ollama> + Send + Sync + Clone + 'static,
+{
+    type Output = Result<String, LLMError>;
+    type IntoFuture = Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let messages = vec![
+                OllamaMessage::system(self.system_prompt),
+                OllamaMessage::user(self.user_prompt),
+            ];
+
+            let options = self.temperature.map(|t| OllamaOptions {
+                temperature: Some(t),
+                top_p: None,
+                top_k: None,
+                num_predict: None,
+            });
+
+            let response = self
+                .client
+                .call_ollama_chat(self.model, messages, options)
+                .await?;
+            Ok(response.message.content)
+        })
+    }
+}
+
 impl<S> Client<S>
 where
-    S: HasProvider<Ollama>,
+    S: HasProvider<Ollama> + Clone + Send + Sync + 'static,
 {
     /// Call Ollama's generate endpoint (legacy)
     pub async fn call_ollama(
@@ -189,28 +257,21 @@ where
         Ok(chat_response)
     }
 
-    /// Convenience method for simple completions
-    pub async fn ollama_complete(
+    /// Convenience method for simple completions using a builder pattern
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = client.ollama_complete("llama3", "You are a helpful assistant.", "Hello!")
+    ///     .temperature(0.7)
+    ///     .await?;
+    /// ```
+    pub fn ollama_complete(
         &self,
         model: impl Into<String>,
         system_prompt: impl Into<String>,
         user_prompt: impl Into<String>,
-        temperature: Option<f32>,
-    ) -> Result<String, LLMError> {
-        let messages = vec![
-            OllamaMessage::system(system_prompt),
-            OllamaMessage::user(user_prompt),
-        ];
-
-        let options = temperature.map(|t| OllamaOptions {
-            temperature: Some(t),
-            top_p: None,
-            top_k: None,
-            num_predict: None,
-        });
-
-        let response = self.call_ollama_chat(model, messages, options).await?;
-        Ok(response.message.content)
+    ) -> OllamaCompletionBuilder<'_, S> {
+        OllamaCompletionBuilder::new(self, model, system_prompt, user_prompt)
     }
 }
 

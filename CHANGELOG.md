@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-07
+
+### Added
+- Builder pattern for LLM completion methods (`deepseek_complete`, `gemini_complete`, `ollama_complete`)
+- Convenience default methods for client configuration (`with_deepseek`, `with_gemini`, `with_ollama`)
+
+### Changed
+- Refactored LLM client configuration to use simpler default methods
+- Moved custom URL configuration to `with_*_at` methods
+- Standardized builder-based completions across all providers
+
+### Fixed
+- Improved API discoverability and reduced boilerplate in common use cases
+
 ## [0.3.0] - 2025-12-26
 
 ### Added

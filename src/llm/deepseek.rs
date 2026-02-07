@@ -97,9 +97,83 @@ pub struct DeepSeekUsage {
     pub total_tokens: u32,
 }
 
+use std::future::IntoFuture;
+use std::pin::Pin;
+
+/// Builder for DeepSeek chat completions
+pub struct DeepSeekCompletionBuilder<'a, S> {
+    client: &'a Client<S>,
+    model: String,
+    system_prompt: String,
+    user_prompt: String,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+}
+
+impl<'a, S> DeepSeekCompletionBuilder<'a, S>
+where
+    S: HasProvider<DeepSeek> + Send + Sync + 'static,
+{
+    pub fn new(
+        client: &'a Client<S>,
+        model: impl Into<String>,
+        system_prompt: impl Into<String>,
+        user_prompt: impl Into<String>,
+    ) -> Self {
+        Self {
+            client,
+            model: model.into(),
+            system_prompt: system_prompt.into(),
+            user_prompt: user_prompt.into(),
+            temperature: None,
+            max_tokens: None,
+        }
+    }
+
+    /// Set the sampling temperature
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the maximum number of tokens to generate
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+}
+
+impl<'a, S> IntoFuture for DeepSeekCompletionBuilder<'a, S>
+where
+    S: HasProvider<DeepSeek> + Send + Sync + Clone + 'static,
+{
+    type Output = Result<String, LLMError>;
+    type IntoFuture = Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let messages = vec![
+                DeepSeekMessage::system(self.system_prompt),
+                DeepSeekMessage::user(self.user_prompt),
+            ];
+
+            let response = self
+                .client
+                .call_deepseek(self.model, messages, self.temperature, self.max_tokens)
+                .await?;
+
+            response
+                .choices
+                .first()
+                .map(|c| c.message.content.clone())
+                .ok_or_else(|| LLMError::InvalidResponse("No choices in response".to_string()))
+        })
+    }
+}
+
 impl<S> Client<S>
 where
-    S: HasProvider<DeepSeek>,
+    S: HasProvider<DeepSeek> + Clone + Send + Sync + 'static,
 {
     /// Call DeepSeek's chat completion API
     ///
@@ -160,29 +234,21 @@ where
         Ok(deepseek_response)
     }
 
-    /// Convenience method for simple single-turn completions
-    pub async fn deepseek_complete(
+    /// Convenience method for simple single-turn completions using a builder pattern
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = client.deepseek_complete("deepseek-chat", "You are a helpful assistant.", "Hello!")
+    ///     .temperature(0.7)
+    ///     .await?;
+    /// ```
+    pub fn deepseek_complete(
         &self,
         model: impl Into<String>,
         system_prompt: impl Into<String>,
         user_prompt: impl Into<String>,
-        temperature: Option<f32>,
-        max_tokens: Option<u32>,
-    ) -> Result<String, LLMError> {
-        let messages = vec![
-            DeepSeekMessage::system(system_prompt),
-            DeepSeekMessage::user(user_prompt),
-        ];
-
-        let response = self
-            .call_deepseek(model, messages, temperature, max_tokens)
-            .await?;
-
-        response
-            .choices
-            .first()
-            .map(|c| c.message.content.clone())
-            .ok_or_else(|| LLMError::InvalidResponse("No choices in response".to_string()))
+    ) -> DeepSeekCompletionBuilder<'_, S> {
+        DeepSeekCompletionBuilder::new(self, model, system_prompt, user_prompt)
     }
 }
 
