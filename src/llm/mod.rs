@@ -2,37 +2,18 @@
 //!
 //! This module provides a unified client for multiple LLM providers using a typestate pattern.
 //! Each provider is enabled/disabled at compile time, ensuring type-safe API usage.
-//!
-//! # Supported Providers
-//! - **Ollama** - Local LLM inference
-//! - **DeepSeek** - OpenAI-compatible cloud API
-//! - **Gemini** - Google's Gemini API
-//!
-//! # Example
-//! ```ignore
-//! use orichalcum::llm::{Client, deepseek::DeepSeekMessage};
-//!
-//! // Create a client with DeepSeek enabled
-//! let client = Client::new()
-//!     .with_deepseek("your-api-key");
-//!
-//! // Use DeepSeek with the fluent builder
-//! let response = client.deepseek_complete()
-//!     .system("You are a helpful assistant.")
-//!     .user("Hello!")
-//!     .temperature(0.7)
-//!     .await?;
-//! ```
 
 pub mod deepseek;
 pub mod error;
 pub mod gemini;
 pub mod ollama;
+pub mod semantic;
 
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 
 pub use deepseek::{DeepSeek, DeepSeekConfig, DeepSeekMessage, DeepSeekResponse};
+pub use error::LLMError;
 pub use gemini::{Gemini, GeminiConfig, GeminiContent, GeminiGenerationConfig, GeminiResponse};
 pub use ollama::{Ollama, OllamaConfig};
 
@@ -43,7 +24,7 @@ pub struct Client<S> {
     /// The underlying HTTP client
     pub(crate) client: reqwest::Client,
     /// Marker for the current state (which providers are enabled)
-    state: PhantomData<S>,
+    pub(crate) state: PhantomData<S>,
     /// Ollama configuration
     pub(crate) ollama_config: Option<OllamaConfig>,
     /// DeepSeek configuration
@@ -129,9 +110,6 @@ impl<D, G> Client<Providers<Disabled, D, G>> {
     }
 
     /// Enable Ollama provider with a custom host URL
-    ///
-    /// # Arguments
-    /// * `host` - Ollama server URL (e.g., "http://localhost:11434")
     pub fn with_ollama_at(self, host: impl Into<String>) -> Client<Providers<Enabled, D, G>> {
         Client {
             client: self.client,
@@ -154,10 +132,6 @@ impl<O, G> Client<Providers<O, Disabled, G>> {
     }
 
     /// Enable DeepSeek provider with API key and custom base URL
-    ///
-    /// # Arguments
-    /// * `api_key` - DeepSeek API key
-    /// * `base_url` - Custom base URL
     pub fn with_deepseek_at(
         self,
         api_key: impl Into<String>,
@@ -185,10 +159,6 @@ impl<O, D> Client<Providers<O, D, Disabled>> {
     }
 
     /// Enable Gemini provider with API key and custom base URL
-    ///
-    /// # Arguments
-    /// * `api_key` - Google Gemini API key
-    /// * `base_url` - Custom base URL
     pub fn with_gemini_at(
         self,
         api_key: impl Into<String>,
@@ -272,6 +242,44 @@ impl<O, D> Client<Providers<O, D, Enabled>> {
         if let Some(ref mut config) = self.gemini_config {
             config.default_model = model.into();
         }
+    }
+}
+
+impl<S: Clone + Send + Sync + 'static> Client<S> {
+    /// Internal dispatch method to call the first available provider.
+    /// Used by semantic nodes where the provider typestate is erased.
+    pub(crate) async fn dispatch_complete(&self, prompt: &str, model: Option<String>) -> Result<String, LLMError> {
+        if self.deepseek_config.is_some() {
+            return self.execute_deepseek(prompt, model).await;
+        }
+
+        if self.gemini_config.is_some() {
+            return self.execute_gemini(prompt, model).await;
+        }
+
+        if self.ollama_config.is_some() {
+            return self.execute_ollama(prompt, model).await;
+        }
+
+        Err(LLMError::ProviderNotConfigured("No LLM provider available".to_string()))
+    }
+
+    async fn execute_deepseek(&self, prompt: &str, model: Option<String>) -> Result<String, LLMError> {
+        let mut builder = deepseek::DeepSeekCompletionBuilder::new(self).user(prompt).json_mode(true);
+        if let Some(m) = model { builder = builder.model(m); }
+        builder.execute().await
+    }
+
+    async fn execute_gemini(&self, prompt: &str, model: Option<String>) -> Result<String, LLMError> {
+        let mut builder = gemini::GeminiCompletionBuilder::new(self).user(prompt).json_mode(true);
+        if let Some(m) = model { builder = builder.model(m); }
+        builder.execute().await
+    }
+
+    async fn execute_ollama(&self, prompt: &str, model: Option<String>) -> Result<String, LLMError> {
+        let mut builder = ollama::OllamaCompletionBuilder::new(self).user(prompt).json_mode(true);
+        if let Some(m) = model { builder = builder.model(m); }
+        builder.execute().await
     }
 }
 

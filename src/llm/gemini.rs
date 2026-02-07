@@ -99,6 +99,8 @@ pub struct GeminiGenerationConfig {
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_mime_type: Option<String>,
 }
 
 impl Default for GeminiGenerationConfig {
@@ -109,6 +111,7 @@ impl Default for GeminiGenerationConfig {
             top_k: Some(40),
             max_output_tokens: None,
             stop_sequences: None,
+            response_mime_type: None,
         }
     }
 }
@@ -151,21 +154,19 @@ use std::pin::Pin;
 
 /// Builder for Gemini content generation
 pub struct GeminiCompletionBuilder<'a, S> {
-    client: &'a Client<S>,
-    model: Option<String>,
-    system_prompt: Option<String>,
-    contents: Vec<GeminiContent>,
-    temperature: Option<f32>,
-    max_tokens: Option<u32>,
-    top_p: Option<f32>,
-    top_k: Option<u32>,
-    stop_sequences: Option<Vec<String>>,
+    pub(crate) client: &'a Client<S>,
+    pub(crate) model: Option<String>,
+    pub(crate) system_prompt: Option<String>,
+    pub(crate) contents: Vec<GeminiContent>,
+    pub(crate) temperature: Option<f32>,
+    pub(crate) max_tokens: Option<u32>,
+    pub(crate) top_p: Option<f32>,
+    pub(crate) top_k: Option<u32>,
+    pub(crate) stop_sequences: Option<Vec<String>>,
+    pub(crate) json_mode: bool,
 }
 
-impl<'a, S> GeminiCompletionBuilder<'a, S>
-where
-    S: HasProvider<Gemini> + Send + Sync + 'static,
-{
+impl<'a, S> GeminiCompletionBuilder<'a, S> {
     pub fn new(client: &'a Client<S>) -> Self {
         Self {
             client,
@@ -177,9 +178,15 @@ where
             top_p: None,
             top_k: None,
             stop_sequences: None,
+            json_mode: false,
         }
     }
+}
 
+impl<'a, S> GeminiCompletionBuilder<'a, S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     /// Set the model for this completion (overrides default)
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
@@ -239,6 +246,76 @@ where
         self.stop_sequences = Some(sequences);
         self
     }
+
+    /// Enable or disable JSON mode
+    pub fn json_mode(mut self, enabled: bool) -> Self {
+        self.json_mode = enabled;
+        self
+    }
+
+    pub(crate) async fn execute(self) -> Result<String, LLMError> {
+        let config = self.client.gemini_config.as_ref().ok_or_else(|| {
+            LLMError::ProviderNotConfigured("Gemini not configured".to_string())
+        })?;
+
+        let model_to_use = self.model.unwrap_or_else(|| config.default_model.clone());
+
+        // Implicit validation
+        let mut cache = self.client.model_cache.gemini.read().unwrap().clone();
+        if cache.is_none() {
+            if let Ok(models) = self.client.gemini_list_models().await {
+                let names: Vec<String> = models
+                    .into_iter()
+                    .map(|m| {
+                        m.name
+                            .strip_prefix("models/")
+                            .unwrap_or(&m.name)
+                            .to_string()
+                    })
+                    .collect();
+                *self.client.model_cache.gemini.write().unwrap() = Some(names.clone());
+                cache = Some(names);
+            }
+        }
+
+        if let Some(valid_models) = cache {
+            if !valid_models.contains(&model_to_use) {
+                return Err(LLMError::InvalidModel(format!(
+                    "Model '{}' not found in Gemini available models",
+                    model_to_use
+                )));
+            }
+        }
+
+        let system_instruction = self.system_prompt.map(GeminiContent::system);
+
+        let generation_config = Some(GeminiGenerationConfig {
+            temperature: self.temperature,
+            max_output_tokens: self.max_tokens,
+            top_p: self.top_p,
+            top_k: self.top_k,
+            stop_sequences: self.stop_sequences,
+            response_mime_type: if self.json_mode { Some("application/json".to_string()) } else { None },
+        });
+
+        let response = self
+            .client
+            .call_gemini(
+                model_to_use,
+                self.contents,
+                system_instruction,
+                generation_config,
+                self.json_mode,
+            )
+            .await?;
+
+        response
+            .candidates
+            .first()
+            .and_then(|c| c.content.parts.first())
+            .and_then(|p| p.text.clone())
+            .ok_or_else(|| LLMError::InvalidResponse("No text in response".to_string()))
+    }
 }
 
 impl<'a, S> IntoFuture for GeminiCompletionBuilder<'a, S>
@@ -249,69 +326,7 @@ where
     type IntoFuture = Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let config = self.client.gemini_config.as_ref().ok_or_else(|| {
-                LLMError::ProviderNotConfigured("Gemini not configured".to_string())
-            })?;
-
-            let model_to_use = self.model.unwrap_or_else(|| config.default_model.clone());
-
-            // Implicit validation
-            let mut cache = self.client.model_cache.gemini.read().unwrap().clone();
-            if cache.is_none() {
-                if let Ok(models) = self.client.gemini_list_models().await {
-                    let names: Vec<String> = models
-                        .into_iter()
-                        .map(|m| {
-                            m.name
-                                .strip_prefix("models/")
-                                .unwrap_or(&m.name)
-                                .to_string()
-                        })
-                        .collect();
-                    *self.client.model_cache.gemini.write().unwrap() = Some(names.clone());
-                    cache = Some(names);
-                } else {
-                    log::warn!("Could not validate Gemini model: failed to fetch model list");
-                }
-            }
-
-            if let Some(valid_models) = cache {
-                if !valid_models.contains(&model_to_use) {
-                    return Err(LLMError::InvalidModel(format!(
-                        "Model '{}' not found in Gemini available models",
-                        model_to_use
-                    )));
-                }
-            }
-
-            let system_instruction = self.system_prompt.map(GeminiContent::system);
-
-            let generation_config = Some(GeminiGenerationConfig {
-                temperature: self.temperature,
-                max_output_tokens: self.max_tokens,
-                top_p: self.top_p,
-                top_k: self.top_k,
-                stop_sequences: self.stop_sequences,
-            });
-
-            let response = self
-                .client
-                .call_gemini(
-                    model_to_use,
-                    self.contents,
-                    system_instruction,
-                    generation_config,
-                )
-                .await?;
-
-            response
-                .candidates
-                .first()
-                .and_then(|c| c.content.parts.first())
-                .and_then(|p| p.text.clone())
-                .ok_or_else(|| LLMError::InvalidResponse("No text in response".to_string()))
-        })
+        Box::pin(self.execute())
     }
 }
 
@@ -331,7 +346,7 @@ struct GeminiModelsResponse {
 
 impl<S> Client<S>
 where
-    S: HasProvider<Gemini> + Clone + Send + Sync + 'static,
+    S: Clone + Send + Sync + 'static,
 {
     /// List available models from Gemini
     pub async fn gemini_list_models(&self) -> Result<Vec<GeminiModel>, LLMError> {
@@ -355,18 +370,13 @@ where
     }
 
     /// Call Gemini's generate content API
-    ///
-    /// # Arguments
-    /// * `model` - Model to use (e.g., "gemini-pro", "gemini-1.5-flash")
-    /// * `contents` - Conversation contents
-    /// * `system_instruction` - Optional system instruction
-    /// * `generation_config` - Optional generation configuration
     pub async fn call_gemini(
         &self,
         model: impl Into<String>,
         contents: Vec<GeminiContent>,
         system_instruction: Option<GeminiContent>,
         generation_config: Option<GeminiGenerationConfig>,
+        _json_mode: bool,
     ) -> Result<GeminiResponse, LLMError> {
         let config = self.gemini_config.as_ref().ok_or_else(|| {
             LLMError::ProviderNotConfigured("Gemini not configured".to_string())
@@ -405,16 +415,13 @@ where
         Ok(gemini_response)
     }
 
-    /// Convenience method for simple single-turn completions using a builder pattern
-    ///
-    /// # Example
-    /// ```ignore
-    /// let result = client.gemini_complete()
-    ///     .user("Hello!")
-    ///     .temperature(0.7)
-    ///     .await?;
-    /// ```
-    pub fn gemini_complete(&self) -> GeminiCompletionBuilder<'_, S> {
+    pub fn gemini_complete(&self) -> GeminiCompletionBuilder<'_, S> 
+    where S: HasProvider<Gemini>
+    {
+        self.gemini_complete_internal()
+    }
+
+    pub(crate) fn gemini_complete_internal(&self) -> GeminiCompletionBuilder<'_, S> {
         GeminiCompletionBuilder::new(self)
     }
 }
@@ -448,7 +455,7 @@ mod tests {
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("contents"));
-        assert!(json.contains("systemInstruction")); // camelCase
+        assert!(json.contains("systemInstruction"));
         assert!(json.contains("generationConfig"));
     }
 }

@@ -70,6 +70,9 @@ mod core;
 
 // Core types
 pub use core::Executable;
+pub use core::semantic::{Promptable, Sealable};
+pub use core::telemetry::{Telemetry, TraceEntry, MemoryTelemetry};
+pub use core::validation::{KeyAvailability, ValidationIssue, ValidationResult};
 
 // Synchronous implementations
 pub use core::sync_impl::batch_flow::BatchFlow;
@@ -113,6 +116,14 @@ pub mod prelude {
         BatchLogic,
         // Core
         Executable,
+        Sealable,
+        Promptable,
+        Telemetry,
+        TraceEntry,
+        MemoryTelemetry,
+        KeyAvailability,
+        ValidationIssue,
+        ValidationResult,
         Flow,
         FlowLogic,
         // Sync

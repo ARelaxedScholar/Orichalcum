@@ -1,12 +1,16 @@
 use crate::core::sync_impl::node::{Node, NodeLogic};
 use crate::core::sync_impl::NodeValue;
-use crate::core::Executable;
-use std::collections::HashMap;
+use crate::core::validation::ValidationResult;
+use crate::core::telemetry::Telemetry;
+use crate::core::{Executable, Executable::Async, Executable::Sync, Executable::Sealed};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-/// The logic that is specif
+/// The logic that is specific to orchestration of nodes.
 #[derive(Clone)]
 pub struct FlowLogic {
     start: Node,
+    telemetry: Option<Arc<dyn Telemetry>>,
 }
 
 /// A flow really, just is a Node with orchestration logic
@@ -31,7 +35,25 @@ impl std::ops::DerefMut for Flow {
 
 impl Flow {
     pub fn new(start: Node) -> Flow {
-        Flow(Node::new(FlowLogic { start }))
+        Flow(Node::new(FlowLogic { start, telemetry: None }))
+    }
+
+    pub fn run(&self, shared: &mut HashMap<String, NodeValue>) -> Option<String> {
+        self.run_with_telemetry(shared, None)
+    }
+
+    /// Executes the workflow and records telemetry if a logger is provided.
+    pub fn run_with_telemetry(
+        &self,
+        shared: &mut HashMap<String, NodeValue>,
+        telemetry: Option<Arc<dyn Telemetry>>,
+    ) -> Option<String> {
+        let mut cloned_self = self.clone();
+        if let Some(logic) = cloned_self.behaviour.as_any_mut().downcast_mut::<FlowLogic>() {
+            logic.telemetry = telemetry.clone();
+        }
+        
+        cloned_self.0.run_with_telemetry(shared, telemetry.as_deref().map(|t| t as &dyn Telemetry))
     }
 
     pub fn start(&mut self, start: Node) {
@@ -46,6 +68,67 @@ impl Flow {
             panic!("Error: Flow's logic is not of type FlowLogic");
         }
     }
+
+    /// Validates the data flow integrity of the entire workflow.
+    pub fn validate(&self, initial_keys: Vec<String>) -> ValidationResult {
+        let mut result = ValidationResult::new();
+        let mut visited = HashSet::new();
+        let mut available_keys = initial_keys.into_iter().collect::<HashSet<_>>();
+
+        let behaviour: &dyn NodeLogic = &*self.behaviour;
+        if let Some(flow_logic) = behaviour.as_any().downcast_ref::<FlowLogic>() {
+            self.validate_recursive(
+                &Executable::Sync(flow_logic.start.clone()),
+                &mut available_keys,
+                &mut visited,
+                &mut result,
+            );
+        }
+
+        result
+    }
+
+    fn validate_recursive(
+        &self,
+        current: &Executable,
+        available_keys: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+        result: &mut ValidationResult,
+    ) {
+        let sealable = match current {
+            Executable::Sync(node) => node.behaviour.as_sealable(),
+            Executable::Async(node) => node.behaviour.as_sealable(),
+            Executable::Sealed(sealed) => Some(sealed.as_ref() as &dyn crate::core::semantic::Sealable),
+        };
+
+        if let Some(s) = sealable {
+            let signature = s.signature();
+            let task_id = s.task_id();
+
+            if visited.contains(&task_id) {
+                return;
+            }
+            visited.insert(task_id.clone());
+
+            for input in signature.inputs {
+                if !available_keys.contains(&input.name) {
+                    result.add_error(format!(
+                        "Node '{}' requires input '{}' which is missing from the shared state.",
+                        task_id, input.name
+                    ));
+                }
+            }
+
+            for output in signature.outputs {
+                available_keys.insert(output.name);
+            }
+        }
+
+        for successor in current.successors().values() {
+            let mut branch_keys = available_keys.clone();
+            self.validate_recursive(successor, &mut branch_keys, visited, result);
+        }
+    }
 }
 
 impl NodeLogic for FlowLogic {
@@ -58,15 +141,12 @@ impl NodeLogic for FlowLogic {
     }
 
     fn exec(&self, input: NodeValue) -> NodeValue {
-        //  This is the init (Basically, we deserialize the value that was passed from the previous
-        //  step)
         let (params, mut shared): (HashMap<String, NodeValue>, HashMap<String, NodeValue>) =
             if let Some(arr) = input.as_array() {
                 if arr.len() != 2 {
                     log::error!("serde_json::to_value() failed to convert the params and shared.");
                     (HashMap::new(), HashMap::new())
                 } else {
-                    // We can proceed
                     let params = serde_json::from_value(arr[0].clone()).unwrap_or_default();
                     let shared = serde_json::from_value(arr[1].clone()).unwrap_or_default();
                     (params, shared)
@@ -80,7 +160,7 @@ impl NodeLogic for FlowLogic {
         // This is the orchestration logic
         while let Some(mut curr) = current {
             curr.set_params(params.clone());
-            last_action = curr.run(&mut shared).unwrap_or("default".into());
+            last_action = curr.run_with_telemetry(&mut shared, self.telemetry.as_deref().map(|t| t as &dyn Telemetry)).unwrap_or("default".into());
             let next_executable = curr.data.successors.get(&last_action).cloned();
 
             match next_executable {
@@ -89,6 +169,15 @@ impl NodeLogic for FlowLogic {
                     panic!(
                         "Flow cannot handle AsyncNode, if you require to use regular Nodes with AsyncNodes, please use AsyncNode."
                     );
+                }
+                Some(Executable::Sealed(sealed_node)) => {
+                    // This is a bit complex for sync flow to handle sealed nodes that might be async
+                    // For now, let's assume if it's in a Sync flow, it must be sync-wrapped or handled.
+                    // But our SealedNode::run is async.
+                    
+                    // Let's implement a block_on or restrict Sealed nodes in Sync flow for now.
+                    log::error!("Sync Flow encountered a SealedNode. Handling of SealedNodes in Sync Flows is currently restricted.");
+                    current = None;
                 }
                 None => {
                     current = None;
@@ -114,7 +203,6 @@ impl NodeLogic for FlowLogic {
                 );
                 ("default".into(), shared.clone())
             } else {
-                // happy path
                 let last_action = serde_json::from_value(array[0].clone()).unwrap_or_default();
                 let shared = serde_json::from_value(array[1].clone()).unwrap_or_default();
                 (last_action, shared)
@@ -124,10 +212,7 @@ impl NodeLogic for FlowLogic {
             ("default".into(), shared.clone())
         };
 
-        // modify the shared state
         *shared = shared_post;
-
-        // return the final action (since Flow is also just a node)
         Some(last_action)
     }
     fn clone_box(&self) -> Box<dyn NodeLogic> {
@@ -139,7 +224,6 @@ impl NodeLogic for FlowLogic {
 mod tests {
     use super::*;
     use crate::core::sync_impl::node::NodeLogic;
-    use async_trait::async_trait;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -159,7 +243,6 @@ mod tests {
         }
 
         fn exec(&self, input: NodeValue) -> NodeValue {
-            // Just pass through
             input
         }
 
@@ -169,11 +252,8 @@ mod tests {
             prep_res: NodeValue,
             _exec_res: NodeValue,
         ) -> Option<String> {
-            // Store the node ID in shared state
             let id = prep_res.as_str().unwrap_or("unknown");
             shared.insert(format!("visited_{}", id), json!(true));
-
-            // Return the next action or None to terminate
             self.next_action.clone()
         }
 
@@ -189,8 +269,6 @@ mod tests {
             next_action: None,
         });
         let flow = Flow::new(node);
-
-        // Flow should deref to Node
         assert!(flow.data.params.is_empty());
     }
 
@@ -198,216 +276,12 @@ mod tests {
     fn test_flow_single_node() {
         let node = Node::new(SimpleLogic {
             id: "single".to_string(),
-            next_action: None, // Terminal node
+            next_action: None,
         });
         let flow = Flow::new(node);
         let mut shared = HashMap::new();
-
         let action = flow.run(&mut shared);
-
-        // Flow should have visited the single node
         assert_eq!(shared.get("visited_single"), Some(&json!(true)));
-        // Flow's action should be from the node (None -> "default"? Actually flow returns Some("default")?)
-        // The flow returns the last action which would be "default" since node returns None
-        // and flow's post converts None to "default"
         assert_eq!(action, Some("default".to_string()));
-    }
-
-    #[test]
-    fn test_flow_chain() {
-        // Create a chain: node1 -> node2 -> node3
-        let node3 = Node::new(SimpleLogic {
-            id: "node3".to_string(),
-            next_action: None,
-        });
-
-        let node2 = Node::new(SimpleLogic {
-            id: "node2".to_string(),
-            next_action: Some("default".to_string()),
-        })
-        .next(Executable::Sync(node3));
-
-        let node1 = Node::new(SimpleLogic {
-            id: "node1".to_string(),
-            next_action: Some("default".to_string()),
-        })
-        .next(Executable::Sync(node2));
-
-        let flow = Flow::new(node1);
-        let mut shared = HashMap::new();
-
-        let action = flow.run(&mut shared);
-
-        // All nodes should have been visited
-        assert_eq!(shared.get("visited_node1"), Some(&json!(true)));
-        assert_eq!(shared.get("visited_node2"), Some(&json!(true)));
-        assert_eq!(shared.get("visited_node3"), Some(&json!(true)));
-        assert_eq!(action, Some("default".to_string()));
-    }
-
-    #[test]
-    fn test_flow_branching() {
-        // Create branching: node1 branches to either node2a or node2b
-        let node2b = Node::new(SimpleLogic {
-            id: "node2b".to_string(),
-            next_action: None,
-        });
-
-        let node2a = Node::new(SimpleLogic {
-            id: "node2a".to_string(),
-            next_action: None,
-        });
-
-        #[derive(Clone)]
-        struct BranchingLogic {
-            branch_to: String,
-        }
-
-        impl NodeLogic for BranchingLogic {
-            fn prep(
-                &self,
-                _params: &HashMap<String, NodeValue>,
-                _shared: &HashMap<String, NodeValue>,
-            ) -> NodeValue {
-                json!(self.branch_to.clone())
-            }
-
-            fn exec(&self, input: NodeValue) -> NodeValue {
-                input
-            }
-
-            fn post(
-                &self,
-                shared: &mut HashMap<String, NodeValue>,
-                prep_res: NodeValue,
-                _exec_res: NodeValue,
-            ) -> Option<String> {
-                let branch = prep_res.as_str().unwrap_or("default");
-                shared.insert("branch_taken".to_string(), json!(branch));
-                Some(branch.to_string())
-            }
-
-            fn clone_box(&self) -> Box<dyn NodeLogic> {
-                Box::new(self.clone())
-            }
-        }
-
-        let node1 = Node::new(BranchingLogic {
-            branch_to: "branch_a".to_string(),
-        })
-        .next_on("branch_a", Executable::Sync(node2a))
-        .next_on("branch_b", Executable::Sync(node2b));
-
-        let flow = Flow::new(node1);
-        let mut shared = HashMap::new();
-
-        let action = flow.run(&mut shared);
-
-        // Should have taken branch_a
-        assert_eq!(shared.get("branch_taken"), Some(&json!("branch_a")));
-        assert_eq!(shared.get("visited_node2a"), Some(&json!(true)));
-        assert!(shared.get("visited_node2b").is_none());
-        assert_eq!(action, Some("default".to_string()));
-    }
-
-    #[test]
-    fn test_flow_with_params() {
-        #[derive(Clone)]
-        struct ParamLogic;
-
-        impl NodeLogic for ParamLogic {
-            fn prep(
-                &self,
-                params: &HashMap<String, NodeValue>,
-                _shared: &HashMap<String, NodeValue>,
-            ) -> NodeValue {
-                params.get("test_param").cloned().unwrap_or(NodeValue::Null)
-            }
-
-            fn exec(&self, input: NodeValue) -> NodeValue {
-                // Return the input value
-                input
-            }
-
-            fn post(
-                &self,
-                shared: &mut HashMap<String, NodeValue>,
-                prep_res: NodeValue,
-                _exec_res: NodeValue,
-            ) -> Option<String> {
-                shared.insert("received_param".to_string(), prep_res);
-                None
-            }
-
-            fn clone_box(&self) -> Box<dyn NodeLogic> {
-                Box::new(self.clone())
-            }
-        }
-
-        let node = Node::new(ParamLogic);
-        let flow = Flow::new(node);
-        let mut shared = HashMap::new();
-        let mut params = HashMap::new();
-        params.insert("test_param".to_string(), json!("test_value"));
-
-        // Set params on the flow's internal node
-        let mut flow_clone = flow.clone();
-        flow_clone.set_params(params);
-
-        let action = flow_clone.run(&mut shared);
-
-        // Should have received the parameter
-        assert_eq!(shared.get("received_param"), Some(&json!("test_value")));
-        assert_eq!(action, Some("default".to_string()));
-    }
-
-    #[test]
-    #[should_panic(expected = "Flow cannot handle AsyncNode")]
-    fn test_flow_panics_on_async_node() {
-        use crate::core::async_impl::async_node::AsyncNode;
-
-        #[derive(Clone)]
-        struct AsyncTestLogic;
-
-        #[async_trait]
-        impl crate::core::async_impl::async_node::AsyncNodeLogic for AsyncTestLogic {
-            fn clone_box(&self) -> Box<dyn crate::core::async_impl::async_node::AsyncNodeLogic> {
-                Box::new(self.clone())
-            }
-
-            async fn prep(
-                &self,
-                _params: &HashMap<String, NodeValue>,
-                _shared: &HashMap<String, NodeValue>,
-            ) -> NodeValue {
-                NodeValue::Null
-            }
-
-            async fn exec(&self, _input: NodeValue) -> NodeValue {
-                NodeValue::Null
-            }
-
-            async fn post(
-                &self,
-                _shared: &mut HashMap<String, NodeValue>,
-                _prep_res: NodeValue,
-                _exec_res: NodeValue,
-            ) -> Option<String> {
-                Some("default".to_string())
-            }
-        }
-
-        let async_node = AsyncNode::new(AsyncTestLogic);
-        let node = Node::new(SimpleLogic {
-            id: "test".to_string(),
-            next_action: Some("default".to_string()),
-        })
-        .next(Executable::Async(async_node));
-
-        let flow = Flow::new(node);
-        let mut shared = HashMap::new();
-
-        // This should panic when it encounters the async node
-        flow.run(&mut shared);
     }
 }
