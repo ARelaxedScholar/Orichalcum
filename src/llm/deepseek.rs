@@ -111,7 +111,7 @@ where
     ///
     /// # Example
     /// ```ignore
-    /// let client = Client::new().with_deepseek("your-api-key", None);
+    /// let client = Client::new().with_deepseek("your-api-key");
     /// let messages = vec![
     ///     DeepSeekMessage::system("You are a helpful assistant."),
     ///     DeepSeekMessage::user("Hello!"),

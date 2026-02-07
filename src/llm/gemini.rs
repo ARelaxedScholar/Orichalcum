@@ -157,7 +157,7 @@ where
     ///
     /// # Example
     /// ```ignore
-    /// let client = Client::new().with_gemini("your-api-key", None);
+    /// let client = Client::new().with_gemini("your-api-key");
     /// let contents = vec![GeminiContent::user("Hello!")];
     /// let response = client.call_gemini(
     ///     "gemini-1.5-flash",

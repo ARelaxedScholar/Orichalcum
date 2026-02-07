@@ -14,7 +14,7 @@
 //!
 //! // Create a client with DeepSeek enabled
 //! let client = Client::new()
-//!     .with_deepseek("your-api-key", None);
+//!     .with_deepseek("your-api-key");
 //!
 //! // Use DeepSeek
 //! let response = client.deepseek_complete(
@@ -113,11 +113,16 @@ impl Default for Client<Providers<Disabled, Disabled, Disabled>> {
 // Builder methods that enable providers
 
 impl<D, G> Client<Providers<Disabled, D, G>> {
-    /// Enable Ollama provider with the given host URL
+    /// Enable Ollama provider with the default host (http://localhost:11434)
+    pub fn with_ollama(self) -> Client<Providers<Enabled, D, G>> {
+        self.with_ollama_at("http://localhost:11434")
+    }
+
+    /// Enable Ollama provider with a custom host URL
     ///
     /// # Arguments
     /// * `host` - Ollama server URL (e.g., "http://localhost:11434")
-    pub fn with_ollama(self, host: impl Into<String>) -> Client<Providers<Enabled, D, G>> {
+    pub fn with_ollama_at(self, host: impl Into<String>) -> Client<Providers<Enabled, D, G>> {
         Client {
             client: self.client,
             state: PhantomData,
@@ -129,15 +134,20 @@ impl<D, G> Client<Providers<Disabled, D, G>> {
 }
 
 impl<O, G> Client<Providers<O, Disabled, G>> {
-    /// Enable DeepSeek provider with API key and optional custom base URL
+    /// Enable DeepSeek provider with API key and default base URL
+    pub fn with_deepseek(self, api_key: impl Into<String>) -> Client<Providers<O, Enabled, G>> {
+        self.with_deepseek_at(api_key, "https://api.deepseek.com")
+    }
+
+    /// Enable DeepSeek provider with API key and custom base URL
     ///
     /// # Arguments
     /// * `api_key` - DeepSeek API key
-    /// * `base_url` - Optional custom base URL (defaults to https://api.deepseek.com)
-    pub fn with_deepseek(
+    /// * `base_url` - Custom base URL
+    pub fn with_deepseek_at(
         self,
         api_key: impl Into<String>,
-        base_url: Option<String>,
+        base_url: impl Into<String>,
     ) -> Client<Providers<O, Enabled, G>> {
         Client {
             client: self.client,
@@ -145,7 +155,7 @@ impl<O, G> Client<Providers<O, Disabled, G>> {
             ollama_host: self.ollama_host,
             deepseek_config: Some(DeepSeekConfig {
                 api_key: api_key.into(),
-                base_url: base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+                base_url: base_url.into(),
             }),
             gemini_config: self.gemini_config,
         }
@@ -153,15 +163,20 @@ impl<O, G> Client<Providers<O, Disabled, G>> {
 }
 
 impl<O, D> Client<Providers<O, D, Disabled>> {
-    /// Enable Gemini provider with API key and optional custom base URL
+    /// Enable Gemini provider with API key and default base URL
+    pub fn with_gemini(self, api_key: impl Into<String>) -> Client<Providers<O, D, Enabled>> {
+        self.with_gemini_at(api_key, "https://generativelanguage.googleapis.com")
+    }
+
+    /// Enable Gemini provider with API key and custom base URL
     ///
     /// # Arguments
     /// * `api_key` - Google Gemini API key
-    /// * `base_url` - Optional custom base URL
-    pub fn with_gemini(
+    /// * `base_url` - Custom base URL
+    pub fn with_gemini_at(
         self,
         api_key: impl Into<String>,
-        base_url: Option<String>,
+        base_url: impl Into<String>,
     ) -> Client<Providers<O, D, Enabled>> {
         Client {
             client: self.client,
@@ -170,8 +185,7 @@ impl<O, D> Client<Providers<O, D, Disabled>> {
             deepseek_config: self.deepseek_config,
             gemini_config: Some(GeminiConfig {
                 api_key: api_key.into(),
-                base_url: base_url
-                    .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string()),
+                base_url: base_url.into(),
             }),
         }
     }
@@ -244,36 +258,47 @@ mod tests {
 
     #[test]
     fn test_with_ollama() {
-        let client = Client::new().with_ollama("http://localhost:11434");
+        let client = Client::new().with_ollama();
         assert_eq!(
             client.ollama_host,
             Some("http://localhost:11434".to_string())
+        );
+
+        let client_custom = Client::new().with_ollama_at("http://192.168.1.10:11434");
+        assert_eq!(
+            client_custom.ollama_host,
+            Some("http://192.168.1.10:11434".to_string())
         );
     }
 
     #[test]
     fn test_with_deepseek() {
-        let client = Client::new().with_deepseek("test-key", None);
+        let client = Client::new().with_deepseek("test-key");
         assert!(client.deepseek_config.is_some());
         let config = client.deepseek_config.unwrap();
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.base_url, "https://api.deepseek.com");
+
+        let client_custom = Client::new().with_deepseek_at("test-key", "https://custom.deepseek.com");
+        let config_custom = client_custom.deepseek_config.unwrap();
+        assert_eq!(config_custom.base_url, "https://custom.deepseek.com");
     }
 
     #[test]
     fn test_with_gemini() {
-        let client = Client::new().with_gemini("test-key", None);
+        let client = Client::new().with_gemini("test-key");
         assert!(client.gemini_config.is_some());
         let config = client.gemini_config.unwrap();
         assert_eq!(config.api_key, "test-key");
+        assert_eq!(config.base_url, "https://generativelanguage.googleapis.com");
     }
 
     #[test]
     fn test_multiple_providers() {
         let client = Client::new()
-            .with_ollama("http://localhost:11434")
-            .with_deepseek("deepseek-key", None)
-            .with_gemini("gemini-key", None);
+            .with_ollama()
+            .with_deepseek("deepseek-key")
+            .with_gemini("gemini-key");
 
         assert!(client.ollama_host.is_some());
         assert!(client.deepseek_config.is_some());
