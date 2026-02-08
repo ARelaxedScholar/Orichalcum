@@ -47,13 +47,16 @@ pub struct ModelCache {
 // ============================================================================
 
 /// Marker indicating a provider is enabled
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Enabled;
 
 /// Marker indicating a provider is disabled
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Disabled;
 
 /// Provider state container
 /// Each type parameter tracks whether a specific provider is configured
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Providers<OllamaState, DeepSeekState, GeminiState> {
     _ollama: PhantomData<OllamaState>,
     _deepseek: PhantomData<DeepSeekState>,
