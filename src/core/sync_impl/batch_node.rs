@@ -143,7 +143,7 @@ mod tests {
         #[derive(Clone)]
         struct TrackingLogic {
             prep_called: bool,
-            post_called: bool,
+            _post_called: bool,
         }
 
         impl NodeLogic for TrackingLogic {
@@ -181,7 +181,7 @@ mod tests {
 
         let inner_logic = TrackingLogic {
             prep_called: false,
-            post_called: false,
+            _post_called: false,
         };
 
         let batch_logic = BatchLogic::new(inner_logic.clone());

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::core::telemetry::{Telemetry, TraceEntry};
+use crate::core::telemetry::Telemetry;
 use crate::core::semantic::{Promptable, Sealable};
 use crate::core::sealed::SealedNode;
 use crate::core::sync_impl::node::NodeCore;

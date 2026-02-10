@@ -1,9 +1,9 @@
+use crate::core::sealed::SealedNode;
+use crate::core::semantic::{Promptable, Sealable};
 use crate::core::sync_impl::AsAny;
 use crate::core::sync_impl::NodeValue;
+use crate::core::telemetry::Telemetry;
 use crate::core::Executable;
-use crate::core::semantic::{Promptable, Sealable};
-use crate::core::sealed::SealedNode;
-use crate::core::telemetry::{Telemetry, TraceEntry};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -35,13 +35,15 @@ impl Node {
 
     /// Seals the node, making it immutable and Snapshotting its identity.
     pub fn seal(self) -> Result<Arc<SealedNode>, String> {
-        let sealable = self.behaviour.as_sealable()
+        let sealable = self
+            .behaviour
+            .as_sealable()
             .ok_or_else(|| "Node behavior does not implement Sealable".to_string())?;
-        
+
         let task_id = sealable.task_id();
         let signature = sealable.signature();
         let sig_hash = signature.structural_hash();
-        
+
         let instr_hash = if let Some(promptable) = self.behaviour.as_promptable() {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
@@ -63,7 +65,9 @@ impl Node {
             format!("{:016x}", hasher.finish())
         };
 
-        let model_name = self.behaviour.as_promptable()
+        let model_name = self
+            .behaviour
+            .as_promptable()
             .and_then(|p| p.model())
             .unwrap_or("native")
             .to_string();

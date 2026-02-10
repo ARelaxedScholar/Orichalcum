@@ -1,8 +1,8 @@
 use crate::core::sync_impl::node::{Node, NodeLogic};
 use crate::core::sync_impl::NodeValue;
-use crate::core::validation::ValidationResult;
 use crate::core::telemetry::Telemetry;
-use crate::core::{Executable, Executable::Async, Executable::Sync, Executable::Sealed};
+use crate::core::validation::ValidationResult;
+use crate::core::Executable;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -35,7 +35,10 @@ impl std::ops::DerefMut for Flow {
 
 impl Flow {
     pub fn new(start: Node) -> Flow {
-        Flow(Node::new(FlowLogic { start, telemetry: None }))
+        Flow(Node::new(FlowLogic {
+            start,
+            telemetry: None,
+        }))
     }
 
     pub fn run(&self, shared: &mut HashMap<String, NodeValue>) -> Option<String> {
@@ -49,11 +52,17 @@ impl Flow {
         telemetry: Option<Arc<dyn Telemetry>>,
     ) -> Option<String> {
         let mut cloned_self = self.clone();
-        if let Some(logic) = cloned_self.behaviour.as_any_mut().downcast_mut::<FlowLogic>() {
+        if let Some(logic) = cloned_self
+            .behaviour
+            .as_any_mut()
+            .downcast_mut::<FlowLogic>()
+        {
             logic.telemetry = telemetry.clone();
         }
-        
-        cloned_self.0.run_with_telemetry(shared, telemetry.as_deref().map(|t| t as &dyn Telemetry))
+
+        cloned_self
+            .0
+            .run_with_telemetry(shared, telemetry.as_deref().map(|t| t as &dyn Telemetry))
     }
 
     pub fn start(&mut self, start: Node) {
@@ -98,7 +107,9 @@ impl Flow {
         let sealable = match current {
             Executable::Sync(node) => node.behaviour.as_sealable(),
             Executable::Async(node) => node.behaviour.as_sealable(),
-            Executable::Sealed(sealed) => Some(sealed.as_ref() as &dyn crate::core::semantic::Sealable),
+            Executable::Sealed(sealed) => {
+                Some(sealed.as_ref() as &dyn crate::core::semantic::Sealable)
+            }
         };
 
         if let Some(s) = sealable {
@@ -160,7 +171,12 @@ impl NodeLogic for FlowLogic {
         // This is the orchestration logic
         while let Some(mut curr) = current {
             curr.set_params(params.clone());
-            last_action = curr.run_with_telemetry(&mut shared, self.telemetry.as_deref().map(|t| t as &dyn Telemetry)).unwrap_or("default".into());
+            last_action = curr
+                .run_with_telemetry(
+                    &mut shared,
+                    self.telemetry.as_deref().map(|t| t as &dyn Telemetry),
+                )
+                .unwrap_or("default".into());
             let next_executable = curr.data.successors.get(&last_action).cloned();
 
             match next_executable {
@@ -170,11 +186,11 @@ impl NodeLogic for FlowLogic {
                         "Flow cannot handle AsyncNode, if you require to use regular Nodes with AsyncNodes, please use AsyncNode."
                     );
                 }
-                Some(Executable::Sealed(sealed_node)) => {
+                Some(Executable::Sealed(_sealed_node)) => {
                     // This is a bit complex for sync flow to handle sealed nodes that might be async
                     // For now, let's assume if it's in a Sync flow, it must be sync-wrapped or handled.
                     // But our SealedNode::run is async.
-                    
+
                     // Let's implement a block_on or restrict Sealed nodes in Sync flow for now.
                     log::error!("Sync Flow encountered a SealedNode. Handling of SealedNodes in Sync Flows is currently restricted.");
                     current = None;

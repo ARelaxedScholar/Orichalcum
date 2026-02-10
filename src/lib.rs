@@ -70,6 +70,7 @@ mod core;
 
 // Core types
 pub use core::Executable;
+pub use core::semantic::registry::{OptimizationRecord, OptimizationRegistry};
 pub use core::semantic::signature::{Signature, Field};
 pub use core::semantic::{Promptable, Sealable};
 pub use core::telemetry::{Telemetry, TraceEntry, MemoryTelemetry};
@@ -117,6 +118,8 @@ pub mod prelude {
         BatchLogic,
         // Core
         Executable,
+        OptimizationRecord,
+        OptimizationRegistry,
         Sealable,
         Promptable,
         Telemetry,
