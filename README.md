@@ -1,6 +1,6 @@
 # Orichalcum: An Agent Orchestration Framework in Rust
 
-**License**: [MIT](LICENSE) | **Crates.io**: [v0.3.0](https://crates.io/crates/orichalcum) | **Docs**: [docs.rs](https://docs.rs/orichalcum)
+**License**: [MIT](LICENSE) | **Crates.io**: [v0.4.0](https://crates.io/crates/orichalcum) | **Docs**: [docs.rs](https://docs.rs/orichalcum)
 
 A brutally-safe, composable agent orchestration framework for building complex, multi-step workflows.
 
@@ -29,10 +29,10 @@ Add Orichalcum to your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-orichalcum = "0.3.0"
+orichalcum = "0.4.0"
 
 # For LLM features (e.g., Ollama client)
-# orichalcum = { version = "0.3.0", features = ["llm"] }
+# orichalcum = { version = "0.4.0", features = ["llm"] }
 ```
 
 ## Get Started: A Simple Example

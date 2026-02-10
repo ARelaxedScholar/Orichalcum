@@ -2,8 +2,15 @@
 name = "orichalcum"
 version = "0.4.0"
 edition = "2024"
-description = "My agent orchestration framework"
+description = "A brutally-safe, composable agent orchestration framework for building complex, multi-step workflows."
 license = "MIT"
+repository = "https://github.com/ARelaxedScholar/Orichalcum"
+readme = "README.md"
+keywords = ["llm", "agent", "workflow", "orchestration", "async"]
+categories = ["asynchronous", "development-tools", "api-bindings"]
+
+[package.metadata.cargo2nix]
+cargo2nixVersion = "0.12.0"
 
 [features]
 default = []

@@ -7,14 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-02-07
+## [0.4.0] - 2026-02-10
 
 ### Added
+- **Semantic Layer**: Introduced `Signature`, `Field`, and `Sealable` traits for defining structural contracts.
+- **Sealed Nodes**: Added `SealedNode` for validated, globally identifiable task instances.
+- **Telemetry**: Implementation of `Telemetry` trait with `MemoryTelemetry` for recording and inspecting execution traces.
+- **Validation**: Added `ValidationIssue` and `ValidationResult` for flow-level contract verification.
 - Builder pattern for LLM completion methods (`deepseek_complete`, `gemini_complete`, `ollama_complete`)
 - Multi-turn fluent message support (`.system()`, `.user()`, `.assistant()`) in builders
 - Implicit model validation with thread-safe caching
 - Convenience default methods for client configuration (`with_deepseek`, `with_gemini`, `with_ollama`)
-- Standardized model selection across all providers with best-in-class defaults (e.g., `gemini-3-flash-preview`, `deepseek-reasoner`, `phi4`)
+- Standardized model selection across all providers with best-in-class defaults (e.g., `gemini-1.5-flash`, `deepseek-chat`, `phi4`)
 - Model discovery API (`list_models`) for each provider
 
 ### Changed
