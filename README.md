@@ -21,7 +21,7 @@ Orichalcum is a spiritual successor to Python's [PocketFlow](https://github.com/
 *   **Node**: The fundamental unit of work. A `Node` encapsulates a piece of logic with three steps: `prep` (prepare inputs), `exec` (execute the core logic), and `post` (process results and update state).
 *   **Flow**: A special `Node` that orchestrates a graph of other `Node`s. It manages the execution sequence based on the outputs of each `Node`.
 *   **Shared State**: A `HashMap` that is passed through the entire `Flow`. Nodes can read from this state to get context and write to it to pass results to subsequent nodes.
-*   **Composition over Inheritance**: Instead of inheriting from base classes, you build complex functionality by wrapping nodes in other nodes. For example, `BatchNode` takes a `Node` and applies its logic to a list of items.
+*   **Semantic Layer (v0.4.0)**: Define structural contracts for your nodes using `Signature`. This allows for compile-time or runtime validation of your workflows.
 
 ## Installation
 
@@ -31,120 +31,93 @@ Add Orichalcum to your project's `Cargo.toml`:
 [dependencies]
 orichalcum = "0.4.0"
 
-# For LLM features (e.g., Ollama client)
+# For LLM features (Ollama, Gemini, DeepSeek)
 # orichalcum = { version = "0.4.0", features = ["llm"] }
+
+# For Telemetry features (tracing, optimization registry)
+# orichalcum = { version = "0.4.0", features = ["telemetry"] }
 ```
 
-## Get Started: A Simple Example
+## Quick Start: Semantic LLM Nodes (v0.4.0)
 
-Here's a complete example of a synchronous flow with two nodes. The first node adds a name to the shared state, and the second node greets that name.
+The most powerful way to use Orichalcum is via **Semantic Nodes**. These nodes have defined input/output contracts and are "sealed" for production stability.
 
 ```rust
-use orichalcum::core::sync_impl::{
-    flow::Flow,
-    node::{Node, NodeLogic},
-    NodeValue,
-};
-use std::collections::HashMap;
+use orichalcum::prelude::*;
 
-// --- Define the logic for our first node ---
+#[tokio::main]
+async fn main() {
+    // 1. Initialize an LLM client (requires "llm" feature)
+    let client = Client::with_ollama();
+
+    // 2. Define a semantic signature
+    let signature = signature!("document -> summary, sentiment");
+
+    // 3. Build a semantic node
+    let node = client.semantic_node()
+        .signature(signature)
+        .instruction("Summarize the document and analyze its sentiment.")
+        .task_id("doc_processor_v1")
+        .seal(); // Returns a SealedNode (wrapped in Executable)
+
+    // 4. Run it in a flow
+    let mut flow = AsyncFlow::new_from_executable(node);
+    let mut state = HashMap::new();
+    state.insert("document".to_string(), "Rust is a multi-paradigm, general-purpose programming language...".into());
+
+    flow.run(&mut state).await;
+
+    println!("Summary: {}", state.get("summary").unwrap());
+    println!("Sentiment: {}", state.get("sentiment").unwrap());
+}
+```
+
+## Traditional Example: A Simple Sync Flow
+
+Orichalcum still supports pure Rust logic nodes for local processing.
+
+```rust
+use orichalcum::prelude::*;
+
 #[derive(Clone)]
 struct AddNameLogic;
 
 impl NodeLogic for AddNameLogic {
-    // `prep` is a required method for the trait.
-    // Here we're just returning a default value.
-    fn prep(&self, _params: &HashMap<String, NodeValue>, _shared: &HashMap<String, NodeValue>) -> NodeValue {
-        NodeValue::Null
-    }
-
-    // `exec` is also required.
-    fn exec(&self, _input: NodeValue) -> NodeValue {
-        NodeValue::Null
-    }
-    
-    // In the `post` step, we modify the shared state.
-    fn post(
-        &self,
-        shared: &mut HashMap<String, NodeValue>,
-        _prep_res: NodeValue,
-        _exec_res: NodeValue,
-    ) -> Option<String> {
+    fn post(&self, shared: &mut HashMap<String, NodeValue>, _prep: NodeValue, _exec: NodeValue) -> Option<String> {
         shared.insert("name".to_string(), "Orichalcum".into());
-        println!("(Node 1) Added name to shared state.");
-        // Return "default" to proceed to the next node connected via the default path.
         Some("default".to_string())
     }
-
-    fn clone_box(&self) -> Box<dyn NodeLogic> {
-        Box::new(self.clone())
-    }
+    fn clone_box(&self) -> Box<dyn NodeLogic> { Box::new(self.clone()) }
 }
 
-// --- Define the logic for our second node ---
 #[derive(Clone)]
 struct GreetLogic;
 
 impl NodeLogic for GreetLogic {
-    fn prep(&self, _params: &HashMap<String, NodeValue>, _shared: &HashMap<String, NodeValue>) -> NodeValue {
-        NodeValue::Null
-    }
-
-    fn exec(&self, _input: NodeValue) -> NodeValue {
-        NodeValue::Null
-    }
-
-    // This node reads from the state that the first node set.
-    fn post(
-        &self,
-        shared: &mut HashMap<String, NodeValue>,
-        _prep_res: NodeValue,
-        _exec_res: NodeValue,
-    ) -> Option<String> {
+    fn post(&self, shared: &mut HashMap<String, NodeValue>, _prep: NodeValue, _exec: NodeValue) -> Option<String> {
         if let Some(name) = shared.get("name").and_then(|v| v.as_str()) {
-            println!("(Node 2) Hello, {}!", name);
-        } else {
-            println!("(Node 2) Hello, world!");
+            println!("Hello, {}!", name);
         }
-        // This is the last node, so we return None to terminate the flow.
         None
     }
-    
-    fn clone_box(&self) -> Box<dyn NodeLogic> {
-        Box::new(self.clone())
-    }
+    fn clone_box(&self) -> Box<dyn NodeLogic> { Box::new(self.clone()) }
 }
 
 fn main() {
-    // 1. Create instances of our nodes.
-    let add_name_node = Node::new(AddNameLogic);
-    let greet_node = Node::new(GreetLogic);
-
-    // 2. Chain them together. `add_name_node` runs first, and on its "default"
-    //    action, it transitions to `greet_node`.
-    //    Note: We must wrap Nodes in the `Executable` enum to add them as successors.
-    let start_node = add_name_node.next(orichalcum::core::Executable::Sync(greet_node));
-
-    // 3. Create a Flow that starts with our first node.
-    let mut flow = Flow::new(start_node);
-
-    // 4. Initialize the shared state and run the flow.
-    let mut shared_state = HashMap::new();
-    flow.run(&mut shared_state);
-
-    // Verify the final state
-    assert_eq!(shared_state.get("name").unwrap(), "Orichalcum");
-    println!("Flow finished!");
+    let start_node = Node::new(AddNameLogic).next(Executable::Sync(Node::new(GreetLogic)));
+    let flow = Flow::new(start_node);
+    let mut state = HashMap::new();
+    flow.run(&mut state);
 }
 ```
 
 ## Features
 
-*   **Blazingly Fast?** Probably. It's written in Rust, so it *feels* faster.
-*   **Memory-Safe Workflows:** Let the compiler be your first line of defense against runtime errors.
-*   **Synchronous & Asynchronous Execution:** Full support for both `sync` and `async` nodes and flows, including parallel batch processing.
-*   **Composable by Design:** No inheritance, just pure, unadulterated composition. Wrap nodes in other nodes for batching, parallelism, and more.
-*   **Optional LLM Integrations:** Built-in support for providers like Ollama behind a feature flag, keeping the core light.
+*   **Semantic Layer**: Define I/O contracts with `Signature` for brutally-safe data flow.
+*   **Telemetry (v0.4.0)**: Built-in tracing for I/O, model names, and execution timestamps.
+*   **Unified LLM Builders**: Fluent API for `Gemini`, `DeepSeek`, and `Ollama`.
+*   **Async & Parallel**: First-class support for `tokio` and parallel batch processing.
+*   **Nix Support**: Includes `flake.nix` for a reproducible development environment.
 
 ## Contributing
 
